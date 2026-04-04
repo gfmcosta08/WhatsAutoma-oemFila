@@ -25,9 +25,9 @@ Cada **deploy** deste repositório atende **um único cliente** (ex.: uma oficin
 - **Atendimento:** boas-vindas e JID do gerente; **horários** editados no app `/agendamento`.
 - **`ADMIN_PASSWORD`:** se definido, o painel exige login.
 
-## Deploy no Render
+## Deploy
 
-Passo a passo: [`deploy.md`](deploy.md).
+Passo a passo (GitHub, Render, Replit): [`DEPLOY.md`](DEPLOY.md). Resumo Render: [`deploy.md`](deploy.md).
 
 ## Replit
 
