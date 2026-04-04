@@ -8,8 +8,22 @@ async function buildMetaUrl() {
   return `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`;
 }
 
+function defaultCountryDigits() {
+  return String(process.env.WHATSAPP_DEFAULT_CC || '')
+    .trim()
+    .replace(/\D/g, '');
+}
+
+/**
+ * Dígitos E.164-friendly. Opcional: WHATSAPP_DEFAULT_CC=55 para anexar DDI quando vier só DDD+número (10–11 dígitos).
+ */
 function normalizeNumber(to) {
-  return String(to || '').replace(/\D/g, '');
+  let n = String(to || '').replace(/\D/g, '');
+  const cc = defaultCountryDigits();
+  if (cc && n && !n.startsWith(cc) && (n.length === 10 || n.length === 11)) {
+    n = cc + n;
+  }
+  return n;
 }
 
 async function sendTextMeta(to, text, opts = {}) {

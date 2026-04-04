@@ -80,9 +80,57 @@ describe('Webhook UazAPI — parsing de entrada', () => {
     };
     assert.strictEqual(extractPhoneFromUazapiBody(body), '');
   });
+
+  it('prioriza remoteJidAlt quando remoteJid é @lid (Baileys)', () => {
+    const body = {
+      data: [
+        {
+          key: {
+            remoteJid: '123456789012345@lid',
+            remoteJidAlt: '5565988861312@s.whatsapp.net',
+            fromMe: false,
+          },
+          message: { conversation: 'oi' },
+        },
+      ],
+    };
+    assert.strictEqual(extractPhoneFromUazapiBody(body), '5565988861312');
+    assert.strictEqual(extractTextFromUazapiBody(body), 'oi');
+  });
+
+  it('usa senderPn quando presente', () => {
+    const body = {
+      key: {
+        remoteJid: '999@lid',
+        senderPn: '5511888776655@s.whatsapp.net',
+        fromMe: false,
+      },
+      message: { conversation: 'teste' },
+    };
+    assert.strictEqual(extractPhoneFromUazapiBody(body), '5511888776655');
+  });
 });
 
 describe('Envio UazAPI — montagem do pedido HTTP', () => {
+  it('WHATSAPP_DEFAULT_CC prefixa DDI em número nacional', () => {
+    const prev = process.env.WHATSAPP_DEFAULT_CC;
+    process.env.WHATSAPP_DEFAULT_CC = '55';
+    const r = buildUazapiSendRequest(
+      {
+        baseUrl: 'https://focus.uazapi.com',
+        instanceToken: 'INST',
+        adminToken: '',
+        authMode: 'query',
+      },
+      '65988861312',
+      'oi'
+    );
+    if (prev !== undefined) process.env.WHATSAPP_DEFAULT_CC = prev;
+    else delete process.env.WHATSAPP_DEFAULT_CC;
+    assert.ok(!r.error);
+    assert.deepStrictEqual(JSON.parse(r.body), { number: '5565988861312', text: 'oi' });
+  });
+
   it('modo query (.uazapi.com): token na query string', () => {
     const r = buildUazapiSendRequest(
       {

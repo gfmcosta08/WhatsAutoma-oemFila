@@ -20,6 +20,19 @@ function normalizeTelefone(from) {
 }
 
 /**
+ * Extrai dígitos de um JID/endereço WhatsApp. Não usa @lid como telefone (API não entrega para @s.whatsapp.net).
+ */
+function digitsFromAddressingJid(raw) {
+  if (raw == null || raw === '') return '';
+  const s = String(raw).trim();
+  const lower = s.toLowerCase();
+  if (lower.includes('@g.us') || lower.includes('broadcast')) return '';
+  if (lower.endsWith('@lid')) return '';
+  const local = s.split('@')[0];
+  return normalizeTelefone(local);
+}
+
+/**
  * Evolution / UazAPI às vezes manda data como array ou data.messages[].
  * Gera objetos “raiz” para onde procurar key/message (ordem: mais específico primeiro).
  */
@@ -120,12 +133,16 @@ function extractPhoneFromRoot(root) {
   if (isFromMeRoot(root)) return '';
 
   const cand = [
-    root.data?.key?.remoteJid,
+    root.data?.key?.remoteJidAlt,
+    root.key?.remoteJidAlt,
+    root.data?.key?.senderPn,
+    root.key?.senderPn,
     root.data?.key?.participant,
+    root.key?.participant,
+    root.data?.key?.remoteJid,
+    root.key?.remoteJid,
     root.data?.from,
     root.data?.sender,
-    root.key?.remoteJid,
-    root.key?.participant,
     root.remoteJid,
     root.from,
     root.telefone,
@@ -139,8 +156,9 @@ function extractPhoneFromRoot(root) {
   for (const c of cand) {
     if (c == null || c === '') continue;
     const s = String(c);
-    const n = normalizeTelefone(c);
-    if (n && !s.includes('@g.us') && !s.includes('broadcast')) return n;
+    if (s.includes('@g.us') || s.toLowerCase().includes('broadcast')) continue;
+    const n = s.includes('@') ? digitsFromAddressingJid(s) : normalizeTelefone(s);
+    if (n) return n;
   }
   return '';
 }
