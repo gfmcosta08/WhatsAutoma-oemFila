@@ -2,9 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import useSWR from 'swr';
-import Link from 'next/link';
 import { API_BASE, painelFetcher } from '@/lib/api';
-import { usePainelToken } from '@/lib/usePainelToken';
 
 type CalRow = {
   id: string;
@@ -20,11 +18,8 @@ export function PainelCalendarioSection() {
   const inicio = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const [from, setFrom] = useState(inicio);
   const [to, setTo] = useState(inicio);
-  const token = usePainelToken();
   const url = `${API_BASE}/agendamento/painel/calendario?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
-  const { data: rows, error, isLoading } = useSWR<CalRow[]>(token ? url : null, painelFetcher);
-
-  if (!token) return null;
+  const { data: rows, error, isLoading } = useSWR<CalRow[]>(url, painelFetcher);
 
   return (
     <div className="rounded-2xl border border-white/10 bg-white/5 p-6 backdrop-blur-sm">
@@ -50,14 +45,7 @@ export function PainelCalendarioSection() {
           />
         </label>
       </div>
-      {error ? (
-        <p className="mt-2 text-sm text-red-400">
-          {(error as Error).message}{' '}
-          <Link href="/painel/login" className="underline">
-            Login
-          </Link>
-        </p>
-      ) : null}
+      {error ? <p className="mt-2 text-sm text-red-400">{(error as Error).message}</p> : null}
       {isLoading ? <p className="mt-4 text-zinc-500">Carregando…</p> : null}
       <ul className="mt-4 max-h-64 space-y-2 overflow-y-auto text-sm">
         {(rows || []).map((r) => (

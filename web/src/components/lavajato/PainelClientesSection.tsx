@@ -2,9 +2,7 @@
 
 import { useState } from 'react';
 import useSWR from 'swr';
-import Link from 'next/link';
-import { API_BASE, getPainelRole, painelDelete, painelFetcher, painelPatchJson } from '@/lib/api';
-import { usePainelToken } from '@/lib/usePainelToken';
+import { API_BASE, painelDelete, painelFetcher, painelPatchJson } from '@/lib/api';
 
 type Veic = { id: string; placa: string; modelo: string; cor: string; ano: number | null };
 type ClienteRow = {
@@ -25,9 +23,8 @@ type HistRow = {
 };
 
 export function PainelClientesSection() {
-  const token = usePainelToken();
   const url = `${API_BASE}/agendamento/painel/clientes`;
-  const { data: clientes, error, mutate } = useSWR<ClienteRow[]>(token ? url : null, painelFetcher);
+  const { data: clientes, error, mutate } = useSWR<ClienteRow[]>(url, painelFetcher);
 
   const [aberto, setAberto] = useState<string | null>(null);
   const [notas, setNotas] = useState<Record<string, string>>({});
@@ -38,19 +35,13 @@ export function PainelClientesSection() {
   async function salvarNotas(clienteId: string, fallback: string) {
     try {
       const texto = notas[clienteId] !== undefined ? notas[clienteId] : fallback;
-      await painelPatchJson(`/agendamento/painel/clientes/${clienteId}/preferencias`, {
-        texto,
-      });
+      await painelPatchJson(`/agendamento/painel/clientes/${clienteId}/preferencias`, { texto });
       await mutate();
       alert('Anotações salvas.');
     } catch (e) {
       alert(e instanceof Error ? e.message : 'Erro');
     }
   }
-
-  if (!token) return null;
-
-  const gestor = getPainelRole() === 'gestor';
 
   async function excluirCliente(id: string) {
     if (!confirm('Excluir permanentemente este cliente e histórico (LGPD)?')) return;
@@ -67,12 +58,7 @@ export function PainelClientesSection() {
       <h2 className="text-lg font-semibold text-white">Clientes e veículos</h2>
       <p className="mt-1 text-xs text-zinc-500">Últimos cadastros. Expanda para histórico e anotações.</p>
       {error ? (
-        <p className="mt-2 text-sm text-red-400">
-          {(error as Error).message}{' '}
-          <Link href="/painel/login" className="underline">
-            Login
-          </Link>
-        </p>
+        <p className="mt-2 text-sm text-red-400">{(error as Error).message}</p>
       ) : null}
       <ul className="mt-4 space-y-2">
         {(clientes || []).map((c) => (
@@ -110,22 +96,22 @@ export function PainelClientesSection() {
                   defaultValue={c.preferencias_notas || ''}
                   onChange={(e) => setNotas((prev) => ({ ...prev, [c.id]: e.target.value }))}
                 />
-                <button
-                  type="button"
-                  onClick={() => salvarNotas(c.id, c.preferencias_notas || '')}
-                  className="mt-2 rounded-lg bg-zinc-700 px-3 py-1 text-xs text-white hover:bg-zinc-600"
-                >
-                  Salvar anotações
-                </button>
-                {gestor ? (
+                <div className="mt-2 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => salvarNotas(c.id, c.preferencias_notas || '')}
+                    className="rounded-lg bg-zinc-700 px-3 py-1 text-xs text-white hover:bg-zinc-600"
+                  >
+                    Salvar anotações
+                  </button>
                   <button
                     type="button"
                     onClick={() => excluirCliente(c.id)}
-                    className="mt-2 ml-2 rounded-lg border border-red-500/50 px-3 py-1 text-xs text-red-400 hover:bg-red-500/10"
+                    className="rounded-lg border border-red-500/50 px-3 py-1 text-xs text-red-400 hover:bg-red-500/10"
                   >
                     Excluir dados (LGPD)
                   </button>
-                ) : null}
+                </div>
               </div>
             ) : null}
           </li>

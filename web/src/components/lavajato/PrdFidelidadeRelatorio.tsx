@@ -4,13 +4,11 @@ import { useEffect, useMemo, useState } from 'react';
 import useSWR from 'swr';
 import {
   API_BASE,
-  getPainelRole,
   painelDownloadBlob,
   painelFetcher,
   painelPostJson,
   painelPutJson,
 } from '@/lib/api';
-import { usePainelToken } from '@/lib/usePainelToken';
 
 type FidCfg = {
   ativo: boolean;
@@ -30,25 +28,20 @@ type Rel = {
 };
 
 export function PrdFidelidadeRelatorio() {
-  const token = usePainelToken();
-  const [gestor, setGestor] = useState(false);
-  useEffect(() => {
-    setGestor(getPainelRole() === 'gestor');
-  }, [token]);
   const hoje = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const [from, setFrom] = useState(hoje);
   const [to, setTo] = useState(hoje);
 
   const { data: fid, mutate: mutFid } = useSWR<FidCfg>(
-    token && gestor ? `${API_BASE}/agendamento/painel/fidelidade` : null,
+    `${API_BASE}/agendamento/painel/fidelidade`,
     painelFetcher
   );
   const { data: rel } = useSWR<Rel>(
-    token && gestor ? `${API_BASE}/agendamento/painel/relatorio?from=${from}&to=${to}` : null,
+    `${API_BASE}/agendamento/painel/relatorio?from=${from}&to=${to}`,
     painelFetcher
   );
   const { data: despesas, mutate: mutDesp } = useSWR<unknown[]>(
-    token && gestor ? `${API_BASE}/agendamento/painel/despesas?from=${from}&to=${to}` : null,
+    `${API_BASE}/agendamento/painel/despesas?from=${from}&to=${to}`,
     painelFetcher
   );
 
@@ -72,8 +65,6 @@ export function PrdFidelidadeRelatorio() {
       setMarco(fid.notificar_marco_pontos ?? 100);
     }
   }, [fid]);
-
-  if (!token || !gestor) return null;
 
   async function salvarFid() {
     await painelPutJson('/agendamento/painel/fidelidade', {
@@ -124,7 +115,7 @@ export function PrdFidelidadeRelatorio() {
   return (
     <div className="space-y-6">
       <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
-        <h2 className="text-lg font-semibold text-white">Programa de fidelidade (gestor)</h2>
+        <h2 className="text-lg font-semibold text-white">Programa de fidelidade</h2>
         <p className="mt-1 text-xs text-zinc-500">
           Pontos = valor pago ÷ centavos por ponto (ex.: 100 = R$1,00 = 1 ponto).
         </p>

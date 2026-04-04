@@ -10,15 +10,13 @@ import { ComandosGuia } from '@/components/agendamento/ComandosGuia';
 import { PendentesSection } from '@/components/agendamento/PendentesSection';
 import { ServicosSection } from '@/components/agendamento/ServicosSection';
 import { FeatureLocked } from '@/components/FeatureLocked';
-import { NovoUsuarioPainel } from '@/components/lavajato/NovoUsuarioPainel';
 import { PainelCalendarioSection } from '@/components/lavajato/PainelCalendarioSection';
 import { PainelCaixaSection } from '@/components/lavajato/PainelCaixaSection';
 import { PainelClientesSection } from '@/components/lavajato/PainelClientesSection';
 import { PainelFilaSection } from '@/components/lavajato/PainelFilaSection';
 import { PrdFidelidadeRelatorio } from '@/components/lavajato/PrdFidelidadeRelatorio';
-import { TotpPainelSection } from '@/components/lavajato/TotpPainelSection';
-import { API_BASE, fetcher, getAdminPanelUrl, setPainelToken } from '@/lib/api';
-import { usePainelToken } from '@/lib/usePainelToken';
+import { AdminConfigSection } from '@/components/admin/AdminConfigSection';
+import { API_BASE, fetcher } from '@/lib/api';
 import type { AccessFlags, AgendamentoConfig } from '@/lib/types';
 
 const SUPPORT_URL = process.env.NEXT_PUBLIC_SUPPORT_WHATSAPP || 'https://wa.me/5511999999999';
@@ -27,7 +25,6 @@ type View = 'principal' | 'configuracao';
 
 export default function AgendamentoPage() {
   const [view, setView] = useState<View>('principal');
-  const painelTok = usePainelToken();
 
   const { data: access, isLoading: loadingAccess } = useSWR<AccessFlags>(
     `${API_BASE}/agendamento/access`,
@@ -78,23 +75,7 @@ export default function AgendamentoPage() {
 
           <BotConfigForm />
 
-          <TotpPainelSection />
-          <NovoUsuarioPainel />
-
-          <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-6 backdrop-blur-sm">
-            <h2 className="mb-1 text-base font-semibold text-white">Painel administrativo</h2>
-            <p className="mb-4 text-sm text-zinc-400">
-              Credenciais UazAPI, URL do webhook, dados da empresa e operação avançada ficam no painel da API.
-            </p>
-            <a
-              href={getAdminPanelUrl()}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 rounded-xl bg-zinc-700 px-5 py-2.5 text-sm font-semibold text-white hover:bg-zinc-600"
-            >
-              Abrir painel administrativo ↗
-            </a>
-          </div>
+          <AdminConfigSection />
         </div>
       </div>
     );
@@ -114,21 +95,6 @@ export default function AgendamentoPage() {
               >
                 Abrir página do cliente (reserva)
               </Link>
-              <Link href="/painel/login" className="rounded-lg border border-white/10 px-3 py-1.5 text-zinc-300 hover:bg-white/5">
-                Login painel operacional
-              </Link>
-              {painelTok ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPainelToken(null);
-                    window.location.reload();
-                  }}
-                  className="rounded-lg border border-white/10 px-3 py-1.5 text-zinc-400 hover:bg-white/5"
-                >
-                  Sair do painel operacional
-                </button>
-              ) : null}
             </div>
           </div>
           <button

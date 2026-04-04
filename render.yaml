@@ -54,3 +54,17 @@ services:
         sync: false
       - key: INTERNAL_NOTIFY_SECRET
         generateValue: true
+      - key: NODE_ENV
+        value: production
+      - key: ENABLE_AGENDAMENTO
+        value: "true"
+      - key: WEBHOOK_BASE_URL
+        sync: false
+      - key: PUBLIC_WEB_BASE_URL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: SETTINGS_ENCRYPTION_KEY
+        generateValue: true
+      - key: ADMIN_SESSION_SECRET
+        generateValue: true

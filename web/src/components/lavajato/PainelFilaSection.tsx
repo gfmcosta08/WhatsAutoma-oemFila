@@ -2,9 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import useSWR from 'swr';
-import Link from 'next/link';
 import { API_BASE, painelFetcher, painelPatchJson } from '@/lib/api';
-import { usePainelToken } from '@/lib/usePainelToken';
 
 type FilaRow = {
   id: string;
@@ -29,9 +27,8 @@ const OPCOES_FILA = [
 export function PainelFilaSection() {
   const hoje = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const [data, setData] = useState(hoje);
-  const token = usePainelToken();
   const url = `${API_BASE}/agendamento/painel/fila?data=${encodeURIComponent(data)}`;
-  const { data: rows, error, mutate, isLoading } = useSWR<FilaRow[]>(token ? url : null, painelFetcher, {
+  const { data: rows, error, mutate, isLoading } = useSWR<FilaRow[]>(url, painelFetcher, {
     refreshInterval: 8000,
   });
 
@@ -44,20 +41,6 @@ export function PainelFilaSection() {
     } catch (e) {
       alert(e instanceof Error ? e.message : 'Erro ao atualizar fila');
     }
-  }
-
-  if (!token) {
-    return (
-      <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-6">
-        <h2 className="text-lg font-semibold text-white">Fila do dia</h2>
-        <p className="mt-2 text-sm text-zinc-300">
-          <Link href="/painel/login" className="text-amber-300 underline">
-            Faça login no painel operacional
-          </Link>{' '}
-          para atualizar status (funcionário ou gestor).
-        </p>
-      </div>
-    );
   }
 
   return (

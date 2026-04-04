@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const config = require('../../config');
+const { verifyPainelToken } = require('../../middleware/painelAuth');
 
 function parseCookies(req) {
   const header = req.headers.cookie;
@@ -47,6 +48,8 @@ function requireAdmin(req, res, next) {
   if (!config.adminPassword) return next();
   const cookies = parseCookies(req);
   if (verifySessionCookie(cookies.admin_sess)) return next();
+  const h = req.headers.authorization || '';
+  if (h.startsWith('Bearer ') && verifyPainelToken(h.slice(7).trim())) return next();
   return res.status(401).json({ error: 'Não autorizado', auth_required: true });
 }
 
