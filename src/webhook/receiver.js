@@ -441,6 +441,13 @@ router.post('/entrada/:token', express.json(), async (req, res) => {
       return;
     }
 
+    logger.info('webhook-entrada', 'processando mensagem', {
+      empresa_id: empresa.id,
+      telefone_tamanho: telefone.length,
+      telefone_ultimos4: telefone.slice(-4),
+      texto_tamanho: String(texto || '').length,
+    });
+
     await handleIncoming({
       telefone,
       texto,

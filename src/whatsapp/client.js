@@ -55,15 +55,23 @@ async function sendTextMeta(to, text, opts = {}) {
   return { ok: true, data: json };
 }
 
+function rawDigits(to) {
+  return String(to || '').replace(/\D/g, '');
+}
+
+function uazapiErrorLooksLikeInvalidWhatsAppNumber(json) {
+  const s = JSON.stringify(json || {}).toLowerCase();
+  return s.includes('not on whatsapp') || s.includes('não está no whatsapp');
+}
+
 /**
- * Monta URL/headers/body do POST /send/text (UazAPI). Útil para testes e depuração.
+ * Monta POST /send/text com dígitos já normalizados (E.164 sem +).
  */
-function buildUazapiSendRequest(creds, to, text) {
+function buildUazapiSendRequestDigits(creds, num, text) {
   const { baseUrl, instanceToken, adminToken, authMode } = creds;
   if (!instanceToken) {
     return { error: 'no_token' };
   }
-  const num = normalizeNumber(to);
   if (!num) {
     return { error: 'no_number' };
   }
@@ -84,6 +92,13 @@ function buildUazapiSendRequest(creds, to, text) {
 }
 
 /**
+ * Monta URL/headers/body do POST /send/text (UazAPI). Útil para testes e depuração.
+ */
+function buildUazapiSendRequest(creds, to, text) {
+  return buildUazapiSendRequestDigits(creds, normalizeNumber(to), text);
+}
+
+/**
  * UazAPI: POST {base}/send/text
  * - uazapiGO v2 / *.uazapi.dev: headers token (+ admintoken opcional) — ver https://docs.uazapi.com
  * - legado / n8n: query ?token=&admintoken= (body: number, text)
@@ -92,26 +107,54 @@ function buildUazapiSendRequest(creds, to, text) {
 async function sendTextUazapi(to, text, opts = {}) {
   const fetchFn = typeof opts.fetch === 'function' ? opts.fetch : global.fetch;
   const creds = await whatsappRuntime.getUazapiSendCredentials();
-  const built = buildUazapiSendRequest(creds, to, text);
-  if (built.error === 'no_token') {
+
+  async function postDigits(num) {
+    const built = buildUazapiSendRequestDigits(creds, num, text);
+    if (built.error) return { built, res: null, json: {} };
+    const res = await fetchFn(built.url, {
+      method: 'POST',
+      headers: built.headers,
+      body: built.body,
+    });
+    const json = await res.json().catch(() => ({}));
+    return { built, res, json };
+  }
+
+  const first = await postDigits(normalizeNumber(to));
+  if (first.built.error === 'no_token') {
     console.warn('[whatsapp] UAZAPI_INSTANCE_TOKEN ausente — mensagem não enviada');
     return { ok: false, skipped: true };
   }
-  if (built.error === 'no_number') {
+  if (first.built.error === 'no_number') {
     console.warn('[whatsapp] Destino vazio — não enviado');
     return { ok: false, skipped: true };
   }
-  const res = await fetchFn(built.url, {
-    method: 'POST',
-    headers: built.headers,
-    body: built.body,
-  });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    console.error('[whatsapp] erro envio UazAPI', res.status, built.authMode, json);
-    return { ok: false, error: json };
+  if (first.res.ok) {
+    return { ok: true, data: first.json };
   }
-  return { ok: true, data: json };
+  console.error('[whatsapp] erro envio UazAPI', first.res.status, first.built.authMode, first.json);
+
+  const raw = rawDigits(to);
+  /** BR: webhook costuma mandar DDD+número sem 55; UazAPI exige E.164. */
+  const tryBrRetry =
+    uazapiErrorLooksLikeInvalidWhatsAppNumber(first.json) &&
+    raw.length >= 10 &&
+    raw.length <= 11 &&
+    !raw.startsWith('55');
+
+  if (tryBrRetry) {
+    const second = await postDigits('55' + raw);
+    if (second.res && second.res.ok) {
+      console.log('[whatsapp] envio OK com DDI 55 (retry após erro "not on WhatsApp")');
+      return { ok: true, data: second.json };
+    }
+    if (second.res) {
+      console.error('[whatsapp] erro envio UazAPI após retry 55', second.res.status, second.json);
+    }
+    return { ok: false, error: second.json && Object.keys(second.json).length ? second.json : first.json };
+  }
+
+  return { ok: false, error: first.json };
 }
 
 async function sendText(to, text, opts) {
@@ -129,5 +172,6 @@ module.exports = {
   sendTextMeta,
   sendTextUazapi,
   buildUazapiSendRequest,
+  buildUazapiSendRequestDigits,
   normalizeNumber,
 };

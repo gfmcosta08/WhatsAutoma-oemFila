@@ -215,6 +215,32 @@ describe('Envio — mock fetch (sem rede)', () => {
     });
   });
 
+  it('sendTextUazapi retenta com 55 após "not on WhatsApp" em número 10 dígitos', async () => {
+    const bodies = [];
+    let n = 0;
+    const mockFetch = async (url, init) => {
+      bodies.push(JSON.parse(init.body));
+      n += 1;
+      if (n === 1) {
+        return {
+          ok: false,
+          status: 500,
+          json: async () => ({ error: 'the number 6568861312@s.whatsapp.net is not on WhatsApp' }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ sent: true }),
+      };
+    };
+    const r = await sendTextUazapi('6568861312', 'oi', { fetch: mockFetch });
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(bodies.length, 2);
+    assert.strictEqual(bodies[0].number, '6568861312');
+    assert.strictEqual(bodies[1].number, '556568861312');
+  });
+
   it('sendTextUazapi retorna skipped sem token (env)', async () => {
     delete process.env.UAZAPI_INSTANCE_TOKEN;
     whatsappRuntime.invalidateCache();
