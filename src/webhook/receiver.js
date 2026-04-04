@@ -22,16 +22,21 @@ function normalizeTelefone(from) {
 function extractTextFromUazapiBody(body) {
   if (!body || typeof body !== 'object') return '';
   const cand = [
+    // Evolution API / UazAPI v2 (data envelope)
+    body.data?.message?.conversation,
+    body.data?.message?.extendedTextMessage?.text,
+    body.data?.message?.imageMessage?.caption,
+    // direto (Baileys-like)
+    body.message?.conversation,
+    body.message?.extendedTextMessage?.text,
+    typeof body.message === 'string' ? body.message : null,
+    // campos genéricos
     body.text,
     body.body,
     body.content,
     body.msg,
     body.Body,
     body.messageText,
-    body.message?.conversation,
-    body.message?.extendedTextMessage?.text,
-    typeof body.message === 'string' ? body.message : null,
-    body.data?.message?.conversation,
     body.payload?.text,
   ];
   for (const c of cand) {
@@ -42,22 +47,33 @@ function extractTextFromUazapiBody(body) {
 
 function extractPhoneFromUazapiBody(body) {
   if (!body || typeof body !== 'object') return '';
+
+  // Ignorar mensagens enviadas pelo próprio bot
+  if (body.data?.key?.fromMe === true) return '';
+  if (body.key?.fromMe === true) return '';
+
   const cand = [
+    // Evolution API / UazAPI v2 (envelope data.key.remoteJid) — mais comum
+    body.data?.key?.remoteJid,
+    body.data?.from,
+    body.data?.sender,
+    // Baileys direto
+    body.key?.remoteJid,
+    body.remoteJid,
+    // campos genéricos
     body.from,
     body.telefone,
     body.phone,
     body.number,
     body.sender,
-    body.remoteJid,
-    body.key?.remoteJid,
     body.chatId,
     body.chat?.id,
-    body.data?.from,
     body.payload?.from,
   ];
   for (const c of cand) {
     const n = normalizeTelefone(c);
-    if (n) return n;
+    // ignora grupos (@g.us) e status broadcasts
+    if (n && !String(c).includes('@g.us') && !String(c).includes('broadcast')) return n;
   }
   return '';
 }
@@ -270,6 +286,14 @@ router.post('/entrada/:token', express.json(), async (req, res) => {
     }
 
     const body = req.body || {};
+
+    logger.info('webhook-entrada', 'payload recebido', {
+      empresa_id: empresa.id,
+      keys: Object.keys(body),
+      data_keys: body.data ? Object.keys(body.data) : null,
+      event: body.event || body.type || null,
+      fromMe: body.data?.key?.fromMe ?? body.key?.fromMe ?? null,
+    });
 
     const telefone = extractPhoneFromUazapiBody(body);
     const texto = extractTextFromUazapiBody(body);
