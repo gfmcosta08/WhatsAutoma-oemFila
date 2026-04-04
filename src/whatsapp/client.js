@@ -2,6 +2,15 @@
 
 const whatsappRuntime = require('../config/whatsappRuntime');
 
+const FETCH_TIMEOUT_MS = 15000; // 15 segundos
+
+function fetchWithTimeout(url, init) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  return fetch(url, { ...init, signal: controller.signal })
+    .finally(() => clearTimeout(timeoutId));
+}
+
 async function buildMetaUrl() {
   const { phoneNumberId } = await whatsappRuntime.getSendCredentials();
   if (!phoneNumberId) throw new Error('Phone Number ID não configurado (admin ou WHATSAPP_PHONE_NUMBER_ID)');
@@ -27,7 +36,7 @@ function normalizeNumber(to) {
 }
 
 async function sendTextMeta(to, text, opts = {}) {
-  const fetchFn = typeof opts.fetch === 'function' ? opts.fetch : global.fetch;
+  const fetchFn = typeof opts.fetch === 'function' ? opts.fetch : fetchWithTimeout;
   const { token } = await whatsappRuntime.getSendCredentials();
   if (!token) {
     console.warn('[whatsapp] Token Meta ausente — mensagem não enviada');
@@ -39,20 +48,25 @@ async function sendTextMeta(to, text, opts = {}) {
     type: 'text',
     text: { body: text },
   };
-  const res = await fetchFn(await buildMetaUrl(), {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    console.error('[whatsapp] erro envio Meta', res.status, json);
-    return { ok: false, error: json };
+  try {
+    const res = await fetchFn(await buildMetaUrl(), {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      console.error('[whatsapp] erro envio Meta', res.status, json);
+      return { ok: false, error: json };
+    }
+    return { ok: true, data: json };
+  } catch (e) {
+    console.error('[whatsapp] erro envio Meta (timeout/rede)', e.message);
+    return { ok: false, error: { message: e.message } };
   }
-  return { ok: true, data: json };
 }
 
 function rawDigits(to) {
@@ -77,16 +91,23 @@ function buildUazapiSendRequestDigits(creds, num, text) {
   }
   const body = JSON.stringify({ number: num, text });
   const base = String(baseUrl || '').replace(/\/$/, '');
+  if (!base || !base.startsWith('http')) {
+    return { error: 'invalid_base_url' };
+  }
   let url = `${base}/send/text`;
   const headers = { 'Content-Type': 'application/json' };
   if (authMode === 'header') {
     headers.token = instanceToken;
     if (adminToken) headers.admintoken = adminToken;
   } else {
-    const u = new URL(url);
-    u.searchParams.set('token', instanceToken);
-    if (adminToken) u.searchParams.set('admintoken', adminToken);
-    url = u.toString();
+    try {
+      const u = new URL(url);
+      u.searchParams.set('token', instanceToken);
+      if (adminToken) u.searchParams.set('admintoken', adminToken);
+      url = u.toString();
+    } catch (e) {
+      return { error: 'url_parse_failed', detail: e.message };
+    }
   }
   return { url, headers, body, authMode };
 }
@@ -105,7 +126,7 @@ function buildUazapiSendRequest(creds, to, text) {
  * @param {object} [opts] - `{ fetch: (url, init) => Promise<Response> }` para testes
  */
 async function sendTextUazapi(to, text, opts = {}) {
-  const fetchFn = typeof opts.fetch === 'function' ? opts.fetch : global.fetch;
+  const fetchFn = typeof opts.fetch === 'function' ? opts.fetch : fetchWithTimeout;
   const creds = await whatsappRuntime.getUazapiSendCredentials();
   console.log('[whatsapp] UazAPI creds check', {
     hasBaseUrl: !!(creds.baseUrl),
@@ -118,13 +139,18 @@ async function sendTextUazapi(to, text, opts = {}) {
   async function postDigits(num) {
     const built = buildUazapiSendRequestDigits(creds, num, text);
     if (built.error) return { built, res: null, json: {} };
-    const res = await fetchFn(built.url, {
-      method: 'POST',
-      headers: built.headers,
-      body: built.body,
-    });
-    const json = await res.json().catch(() => ({}));
-    return { built, res, json };
+    try {
+      const res = await fetchFn(built.url, {
+        method: 'POST',
+        headers: built.headers,
+        body: built.body,
+      });
+      const json = await res.json().catch(() => ({}));
+      return { built, res, json };
+    } catch (e) {
+      console.error('[whatsapp] erro envio UazAPI (timeout/rede)', e.message);
+      return { built, res: { ok: false, status: 0 }, json: { error: e.message } };
+    }
   }
 
   const first = await postDigits(normalizeNumber(to));

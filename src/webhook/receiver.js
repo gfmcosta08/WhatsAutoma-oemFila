@@ -27,6 +27,9 @@ function fixBrazilianMobile(digits) {
   let n = String(digits || '').replace(/\D/g, '');
   if (!n) return n;
 
+  // Se já tem 13 dígitos e começa com 55, está correto (55 + DDD + 9 dígitos)
+  if (n.startsWith('55') && n.length === 13 && n[4] === '9') return n;
+
   // Remove DDI 55 temporariamente para análise
   let has55 = false;
   let core = n;
@@ -49,14 +52,15 @@ function fixBrazilianMobile(digits) {
 }
 
 /**
- * Extrai dígitos de um JID/endereço WhatsApp. Não usa @lid como telefone (API não entrega para @s.whatsapp.net).
+ * Extrai dígitos de um JID/endereço WhatsApp.
+ * @lid é aceito (Linked Device) pois UazAPI pode enviar o número nesse formato.
  */
 function digitsFromAddressingJid(raw) {
   if (raw == null || raw === '') return '';
   const s = String(raw).trim();
   const lower = s.toLowerCase();
   if (lower.includes('@g.us') || lower.includes('broadcast')) return '';
-  if (lower.endsWith('@lid')) return '';
+  // @lid é aceito - extrai os dígitos mesmo assim
   const local = s.split('@')[0];
   return normalizeTelefone(local);
 }
