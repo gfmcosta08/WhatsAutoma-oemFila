@@ -29,12 +29,22 @@ type PublicUrls = {
 
 const ADMIN_BASE = `${API_BASE}/admin/api`;
 
-async function adminFetch(path: string, opts?: RequestInit) {
+let cachedAdminPassword: string | null = null;
+
+async function adminFetch(path: string, opts?: RequestInit): Promise<unknown> {
+  const headers: Record<string, string> = {};
+  if (cachedAdminPassword) {
+    headers['X-Admin-Password'] = cachedAdminPassword;
+  }
   const r = await fetch(`${ADMIN_BASE}${path}`, {
     credentials: 'include',
     ...opts,
+    headers: { ...headers, ...(opts?.headers as Record<string, string> || {}) },
   });
-  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}));
+    throw Object.assign(new Error(body.error || `HTTP ${r.status}`), { status: r.status });
+  }
   return r.json();
 }
 
@@ -100,12 +110,88 @@ function FieldRow({
   );
 }
 
-function EmpresaSection() {
+function AdminLoginGate({ children }: { children: React.ReactNode }) {
+  const [authRequired, setAuthRequired] = useState<boolean | null>(null);
+  const [password, setPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
+  const [logging, setLogging] = useState(false);
+
+  useEffect(() => {
+    fetch(`${ADMIN_BASE}/auth/status`, { credentials: 'include' })
+      .then((r) => r.json())
+      .then((d) => {
+        if (!d.auth_required || d.ok) {
+          setAuthRequired(false);
+        } else {
+          setAuthRequired(true);
+        }
+      })
+      .catch(() => setAuthRequired(false));
+  }, []);
+
+  async function login(e: React.FormEvent) {
+    e.preventDefault();
+    setLogging(true);
+    setLoginError('');
+    try {
+      const r = await fetch(`${ADMIN_BASE}/auth/login`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Senha inválida');
+      cachedAdminPassword = password;
+      setAuthRequired(false);
+    } catch (e) {
+      setLoginError(e instanceof Error ? e.message : 'Erro');
+    } finally {
+      setLogging(false);
+    }
+  }
+
+  if (authRequired === null) {
+    return <div className="h-16 animate-pulse rounded-2xl bg-white/5" />;
+  }
+
+  if (authRequired) {
+    return (
+      <div className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-6">
+        <h2 className="mb-1 text-base font-semibold text-white">Acesso protegido</h2>
+        <p className="mb-4 text-sm text-zinc-400">
+          Digite a senha de administrador (<code className="text-zinc-300">ADMIN_PASSWORD</code>) para acessar as configurações.
+        </p>
+        <form onSubmit={login} className="flex flex-col gap-3 sm:flex-row">
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Senha de administrador"
+            autoFocus
+            className="flex-1 rounded-xl border border-white/10 bg-black/40 px-3 py-2.5 text-sm text-white placeholder:text-zinc-600 focus:border-emerald-600 focus:outline-none"
+          />
+          <button
+            type="submit"
+            disabled={logging || !password}
+            className="rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
+          >
+            {logging ? 'Entrando…' : 'Entrar'}
+          </button>
+        </form>
+        {loginError && <p className="mt-2 text-sm text-red-400">{loginError}</p>}
+      </div>
+    );
+  }
+
+  return <>{children}</>;
+}
+
+function EmpresaSection({ onWebhookUrl }: { onWebhookUrl?: (url: string) => void }) {
   const [empresa, setEmpresa] = useState<Empresa | null>(null);
   const [nome, setNome] = useState('');
   const [email, setEmail] = useState('');
   const [cnpj, setCnpj] = useState('');
-  const [webhookUrl, setWebhookUrl] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState('');
@@ -113,14 +199,14 @@ function EmpresaSection() {
   useEffect(() => {
     (async () => {
       try {
-        const lista: Empresa[] = await adminFetch('/empresa');
+        const lista = (await adminFetch('/empresa')) as Empresa[];
         if (lista.length > 0) {
           const e = lista[0];
           setEmpresa(e);
           setNome(e.nome);
           setEmail(e.email || '');
           setCnpj(e.cnpj || '');
-          setWebhookUrl(e.webhook_url || '');
+          if (e.webhook_url) onWebhookUrl?.(e.webhook_url);
         }
       } catch {
         /* empresa ainda não cadastrada */
@@ -128,7 +214,7 @@ function EmpresaSection() {
         setLoading(false);
       }
     })();
-  }, []);
+  }, [onWebhookUrl]);
 
   async function salvar(ev: React.FormEvent) {
     ev.preventDefault();
@@ -136,23 +222,23 @@ function EmpresaSection() {
     setMsg('');
     try {
       if (empresa) {
-        const updated: Empresa = await adminFetch(`/empresa/${empresa.id}`, {
+        const updated = (await adminFetch(`/empresa/${empresa.id}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ nome: nome.trim(), email: email.trim() || null, cnpj: cnpj.replace(/\D/g, '') || null }),
-        });
+        })) as Empresa;
         setEmpresa(updated);
-        setWebhookUrl(updated.webhook_url || '');
+        if (updated.webhook_url) onWebhookUrl?.(updated.webhook_url);
         setMsg('Salvo com sucesso.');
       } else {
-        if (!nome.trim()) { setMsg('Nome obrigatório.'); return; }
-        const created: Empresa = await adminFetch('/empresa', {
+        if (!nome.trim()) { setMsg('Nome obrigatório.'); setSaving(false); return; }
+        const created = (await adminFetch('/empresa', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ nome: nome.trim(), email: email.trim() || null, cnpj: cnpj.replace(/\D/g, '') || null }),
-        });
+        })) as Empresa;
         setEmpresa(created);
-        setWebhookUrl(created.webhook_url || '');
+        if (created.webhook_url) onWebhookUrl?.(created.webhook_url);
         setMsg('Empresa cadastrada.');
       }
     } catch (e) {
@@ -184,17 +270,11 @@ function EmpresaSection() {
           {saving ? 'Salvando…' : empresa ? 'Atualizar empresa' : 'Cadastrar empresa'}
         </button>
       </form>
-      {webhookUrl && (
-        <div className="mt-5 space-y-2">
-          <CopyField label="URL do Webhook (UazAPI)" value={webhookUrl} />
-          <p className="text-xs text-zinc-600">Registre essa URL nas configurações do seu servidor UazAPI.</p>
-        </div>
-      )}
     </div>
   );
 }
 
-function UazapiSection() {
+function UazapiSection({ webhookUrl }: { webhookUrl: string }) {
   const [settings, setSettings] = useState<WhatsappSettings | null>(null);
   const [urls, setUrls] = useState<PublicUrls | null>(null);
   const [baseUrl, setBaseUrl] = useState('');
@@ -212,10 +292,10 @@ function UazapiSection() {
           adminFetch('/whatsapp-settings') as Promise<WhatsappSettings>,
           adminFetch('/public-urls') as Promise<PublicUrls>,
         ]);
-        setSettings(s);
-        setUrls(u);
-        setBaseUrl(s.uazapi_base_url || '');
-        setPhone(s.uazapi_instance_phone || '');
+        setSettings(s as WhatsappSettings);
+        setUrls(u as PublicUrls);
+        setBaseUrl((s as WhatsappSettings).uazapi_base_url || '');
+        setPhone((s as WhatsappSettings).uazapi_instance_phone || '');
       } catch {
         /* sem auth ou erro */
       } finally {
@@ -223,6 +303,8 @@ function UazapiSection() {
       }
     })();
   }, []);
+
+  const displayWebhookUrl = urls?.uazapi_webhook_url || webhookUrl;
 
   async function salvar(ev: React.FormEvent) {
     ev.preventDefault();
@@ -235,11 +317,11 @@ function UazapiSection() {
     if (instanceToken) patch.uazapi_instance_token = instanceToken;
     if (adminToken) patch.uazapi_admin_token = adminToken;
     try {
-      const updated: WhatsappSettings = await adminFetch('/whatsapp-settings', {
+      const updated = (await adminFetch('/whatsapp-settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(patch),
-      });
+      })) as WhatsappSettings;
       setSettings(updated);
       setInstanceToken('');
       setAdminToken('');
@@ -259,6 +341,18 @@ function UazapiSection() {
       <p className="mb-4 text-xs text-zinc-500">
         Provedor efetivo: <span className="text-zinc-300">{settings?.effective_provider || '—'}</span>
       </p>
+
+      {displayWebhookUrl && (
+        <div className="mb-5 space-y-2 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+          <CopyField label="URL do Webhook — registre no painel UazAPI" value={displayWebhookUrl} />
+          {urls && !urls.webhook_base_configured && (
+            <p className="text-xs text-amber-400">
+              WEBHOOK_BASE_URL não configurada no Render — defina para gerar a URL correta.
+            </p>
+          )}
+        </div>
+      )}
+
       <form onSubmit={salvar} className="space-y-3">
         <FieldRow
           label="Base URL"
@@ -296,12 +390,12 @@ function UazapiSection() {
             type="password"
             value={adminToken}
             onChange={(e) => setAdminToken(e.target.value)}
-            placeholder={settings?.uazapi_admin_token_set ? 'Deixe vazio para manter o atual' : 'Token de admin'}
+            placeholder={settings?.uazapi_admin_token_set ? 'Deixe vazio para manter o atual' : 'Token de admin (opcional)'}
             className="w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2.5 text-sm text-white placeholder:text-zinc-600 focus:border-emerald-600 focus:outline-none"
           />
         </div>
         <FieldRow
-          label="Número da instância (E.164, só dígitos)"
+          label="Número da instância (só dígitos, ex: 5511999999999)"
           value={phone}
           onChange={setPhone}
           placeholder="5511999999999"
@@ -317,25 +411,19 @@ function UazapiSection() {
           {saving ? 'Salvando…' : 'Salvar configuração WhatsApp'}
         </button>
       </form>
-      {urls?.uazapi_webhook_url && (
-        <div className="mt-5 space-y-2">
-          <CopyField label="URL do Webhook" value={urls.uazapi_webhook_url} />
-          {!urls.webhook_base_configured && (
-            <p className="text-xs text-amber-400">
-              WEBHOOK_BASE_URL não configurada — defina no painel Render para gerar a URL correta.
-            </p>
-          )}
-        </div>
-      )}
     </div>
   );
 }
 
 export function AdminConfigSection() {
+  const [webhookUrl, setWebhookUrl] = useState('');
+
   return (
-    <div className="space-y-6">
-      <EmpresaSection />
-      <UazapiSection />
-    </div>
+    <AdminLoginGate>
+      <div className="space-y-6">
+        <EmpresaSection onWebhookUrl={setWebhookUrl} />
+        <UazapiSection webhookUrl={webhookUrl} />
+      </div>
+    </AdminLoginGate>
   );
 }
