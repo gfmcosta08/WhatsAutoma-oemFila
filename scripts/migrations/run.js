@@ -41,9 +41,15 @@ async function run() {
       continue;
     }
     const sql = fs.readFileSync(path.join(migDir, f), 'utf8');
-    await client.query(sql);
-    await client.query('INSERT INTO _migrations (filename) VALUES ($1)', [f]);
-    console.log('Migração aplicada:', f);
+    try {
+      await client.query(sql);
+      await client.query('INSERT INTO _migrations (filename) VALUES ($1) ON CONFLICT DO NOTHING', [f]);
+      console.log('Migração aplicada:', f);
+    } catch (err) {
+      console.error(`Erro na migração ${f}:`, err.message);
+      await client.end();
+      process.exit(1);
+    }
   }
 
   await client.end();

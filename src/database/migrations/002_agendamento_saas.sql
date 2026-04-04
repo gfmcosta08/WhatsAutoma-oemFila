@@ -6,7 +6,13 @@ CREATE TABLE IF NOT EXISTS empresas (
     created_at TIMESTAMP DEFAULT NOW()
 );
 
-INSERT INTO empresas (id, nome) VALUES (1, 'Oficina') ON CONFLICT (id) DO NOTHING;
+DO $$
+BEGIN
+  INSERT INTO empresas (id, nome) VALUES (1, 'Oficina') ON CONFLICT (id) DO NOTHING;
+EXCEPTION WHEN OTHERS THEN
+  NULL;
+END;
+$$;
 SELECT setval(pg_get_serial_sequence('empresas', 'id'), (SELECT COALESCE(MAX(id), 1) FROM empresas));
 
 CREATE TABLE IF NOT EXISTS agendamento_config (
