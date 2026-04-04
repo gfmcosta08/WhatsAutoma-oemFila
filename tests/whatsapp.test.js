@@ -44,6 +44,42 @@ describe('Webhook UazAPI — parsing de entrada', () => {
     assert.strictEqual(extractPhoneFromUazapiBody({}), '');
     assert.strictEqual(extractTextFromUazapiBody({}), '');
   });
+
+  it('extrai de data[] (Evolution messages.upsert em lote)', () => {
+    const body = {
+      event: 'messages.upsert',
+      data: [
+        {
+          key: { remoteJid: '5511999001122@s.whatsapp.net', fromMe: false },
+          message: { conversation: 'Oi' },
+        },
+      ],
+    };
+    assert.strictEqual(extractPhoneFromUazapiBody(body), '5511999001122');
+    assert.strictEqual(extractTextFromUazapiBody(body), 'Oi');
+  });
+
+  it('extrai de data.messages[]', () => {
+    const body = {
+      data: {
+        messages: [
+          {
+            key: { remoteJid: '5521987654321@s.whatsapp.net', fromMe: false },
+            message: { extendedTextMessage: { text: 'texto longo' } },
+          },
+        ],
+      },
+    };
+    assert.strictEqual(extractPhoneFromUazapiBody(body), '5521987654321');
+    assert.strictEqual(extractTextFromUazapiBody(body), 'texto longo');
+  });
+
+  it('ignora fromMe no envelope do array', () => {
+    const body = {
+      data: [{ key: { remoteJid: '5511999001122@s.whatsapp.net', fromMe: true }, message: { conversation: 'x' } }],
+    };
+    assert.strictEqual(extractPhoneFromUazapiBody(body), '');
+  });
 });
 
 describe('Envio UazAPI — montagem do pedido HTTP', () => {

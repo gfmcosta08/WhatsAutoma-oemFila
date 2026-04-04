@@ -19,25 +19,82 @@ function normalizeTelefone(from) {
   return String(from || '').replace(/\D/g, '');
 }
 
-function extractTextFromUazapiBody(body) {
-  if (!body || typeof body !== 'object') return '';
+/**
+ * Evolution / UazAPI às vezes manda data como array ou data.messages[].
+ * Gera objetos “raiz” para onde procurar key/message (ordem: mais específico primeiro).
+ */
+function* eachUazapiExtractionRoot(body) {
+  if (!body || typeof body !== 'object') return;
+  const push = (o) => {
+    if (o && typeof o === 'object' && !Array.isArray(o)) return o;
+    return null;
+  };
+  const d = body.data;
+  if (Array.isArray(d)) {
+    for (const item of d) {
+      const o = push(item);
+      if (o) {
+        yield o;
+        if (Array.isArray(o.messages)) {
+          for (const m of o.messages) {
+            const mo = push(m);
+            if (mo) yield mo;
+          }
+        }
+      }
+    }
+  } else {
+    const po = push(d);
+    if (po) {
+      yield po;
+      if (Array.isArray(po.messages)) {
+        for (const m of po.messages) {
+          const mo = push(m);
+          if (mo) yield mo;
+        }
+      }
+    }
+  }
+  /* não dar return aqui: data em array ainda pode precisar do envelope raiz (ex.: from/text n8n) */
+  if (Array.isArray(body.messages)) {
+    for (const m of body.messages) {
+      const mo = push(m);
+      if (mo) yield mo;
+    }
+  }
+  const inner = push(body.body);
+  if (inner) yield inner;
+  yield body;
+}
+
+function isFromMeRoot(root) {
+  if (!root || typeof root !== 'object') return false;
+  if (root.key?.fromMe === true) return true;
+  if (root.data?.key?.fromMe === true) return true;
+  return false;
+}
+
+function extractTextFromRoot(root) {
+  if (!root || typeof root !== 'object') return '';
   const cand = [
-    // Evolution API / UazAPI v2 (data envelope)
-    body.data?.message?.conversation,
-    body.data?.message?.extendedTextMessage?.text,
-    body.data?.message?.imageMessage?.caption,
-    // direto (Baileys-like)
-    body.message?.conversation,
-    body.message?.extendedTextMessage?.text,
-    typeof body.message === 'string' ? body.message : null,
-    // campos genéricos
-    body.text,
-    body.body,
-    body.content,
-    body.msg,
-    body.Body,
-    body.messageText,
-    body.payload?.text,
+    root.data?.message?.conversation,
+    root.data?.message?.extendedTextMessage?.text,
+    root.data?.message?.imageMessage?.caption,
+    root.data?.message?.buttonsResponseMessage?.selectedDisplayText,
+    root.data?.message?.listResponseMessage?.title,
+    root.message?.conversation,
+    root.message?.extendedTextMessage?.text,
+    root.message?.imageMessage?.caption,
+    root.message?.buttonsResponseMessage?.selectedDisplayText,
+    root.message?.listResponseMessage?.title,
+    typeof root.message === 'string' ? root.message : null,
+    root.text,
+    root.body,
+    root.content,
+    root.msg,
+    root.Body,
+    root.messageText,
+    root.payload?.text,
   ];
   for (const c of cand) {
     if (c != null && String(c).trim()) return String(c).trim();
@@ -45,35 +102,54 @@ function extractTextFromUazapiBody(body) {
   return '';
 }
 
-function extractPhoneFromUazapiBody(body) {
+function extractTextFromUazapiBody(body) {
   if (!body || typeof body !== 'object') return '';
+  let best = '';
+  for (const root of eachUazapiExtractionRoot(body)) {
+    const t = extractTextFromRoot(root);
+    if (t) {
+      best = t;
+      break;
+    }
+  }
+  return best;
+}
 
-  // Ignorar mensagens enviadas pelo próprio bot
-  if (body.data?.key?.fromMe === true) return '';
-  if (body.key?.fromMe === true) return '';
+function extractPhoneFromRoot(root) {
+  if (!root || typeof root !== 'object') return '';
+  if (isFromMeRoot(root)) return '';
 
   const cand = [
-    // Evolution API / UazAPI v2 (envelope data.key.remoteJid) — mais comum
-    body.data?.key?.remoteJid,
-    body.data?.from,
-    body.data?.sender,
-    // Baileys direto
-    body.key?.remoteJid,
-    body.remoteJid,
-    // campos genéricos
-    body.from,
-    body.telefone,
-    body.phone,
-    body.number,
-    body.sender,
-    body.chatId,
-    body.chat?.id,
-    body.payload?.from,
+    root.data?.key?.remoteJid,
+    root.data?.key?.participant,
+    root.data?.from,
+    root.data?.sender,
+    root.key?.remoteJid,
+    root.key?.participant,
+    root.remoteJid,
+    root.from,
+    root.telefone,
+    root.phone,
+    root.number,
+    root.sender,
+    root.chatId,
+    root.chat?.id,
+    root.payload?.from,
   ];
   for (const c of cand) {
+    if (c == null || c === '') continue;
+    const s = String(c);
     const n = normalizeTelefone(c);
-    // ignora grupos (@g.us) e status broadcasts
-    if (n && !String(c).includes('@g.us') && !String(c).includes('broadcast')) return n;
+    if (n && !s.includes('@g.us') && !s.includes('broadcast')) return n;
+  }
+  return '';
+}
+
+function extractPhoneFromUazapiBody(body) {
+  if (!body || typeof body !== 'object') return '';
+  for (const root of eachUazapiExtractionRoot(body)) {
+    const p = extractPhoneFromRoot(root);
+    if (p) return p;
   }
   return '';
 }
@@ -165,7 +241,14 @@ async function handleIncomingOperador({ telefone, texto, whatsapp_message_id, wh
   const { respostas, outboundToCliente } = await processarMensagemOperador({ telefone, texto });
 
   for (const line of respostas) {
-    await sendTextNotify(telefone, line);
+    const sent = await sendTextNotify(telefone, line);
+    if (!sent.ok && !sent.skipped) {
+      await logger.error('webhook', 'falha envio WhatsApp ao operador', {
+        telefone,
+        trecho: line.slice(0, 80),
+        detalhe: sent.error || null,
+      });
+    }
     await repos.insertMensagemOutbound({
       cliente_id: cliente.id,
       texto: line,
@@ -174,7 +257,13 @@ async function handleIncomingOperador({ telefone, texto, whatsapp_message_id, wh
   }
 
   for (const o of outboundToCliente) {
-    await sendTextNotify(o.telefone, o.texto);
+    const sent = await sendTextNotify(o.telefone, o.texto);
+    if (!sent.ok && !sent.skipped) {
+      await logger.error('webhook', 'falha envio WhatsApp (operador→cliente)', {
+        telefone: o.telefone,
+        detalhe: sent.error || null,
+      });
+    }
   }
 
   await logger.info('webhook', 'mensagem operador', {
@@ -236,11 +325,22 @@ async function handleIncomingCliente({ telefone, texto, whatsapp_message_id, wha
     ultima_mensagem_id: whatsapp_message_id,
   });
 
-  await invalidateSessaoCache(cliente.id);
-  await setSessaoCache(cliente.id, { estado_atual: novoEstado, dados_temporarios: novosDados });
+  try {
+    await invalidateSessaoCache(cliente.id);
+    await setSessaoCache(cliente.id, { estado_atual: novoEstado, dados_temporarios: novosDados });
+  } catch (e) {
+    await logger.warn('webhook', 'redis sessão falhou (resposta ainda enviada)', { err: e.message });
+  }
 
   for (const line of resultado.respostas) {
-    await sendTextNotify(telefone, line);
+    const sent = await sendTextNotify(telefone, line);
+    if (!sent.ok && !sent.skipped) {
+      await logger.error('webhook', 'falha envio WhatsApp ao cliente', {
+        telefone,
+        trecho: line.slice(0, 80),
+        detalhe: sent.error || null,
+      });
+    }
     await repos.insertMensagemOutbound({
       cliente_id: cliente.id,
       texto: line,
@@ -312,7 +412,14 @@ router.post('/entrada/:token', express.json(), async (req, res) => {
       body.profileName || body.profile_name || body.name || body.pushName || body.notifyName || null;
 
     if (!telefone) {
-      logger.warn('webhook-entrada', 'payload sem telefone', { empresa_id: empresa.id, body });
+      const d = body?.data;
+      logger.warn('webhook-entrada', 'payload sem telefone (estrutura não reconhecida)', {
+        empresa_id: empresa.id,
+        event: body.event || body.type || null,
+        dataIsArray: Array.isArray(d),
+        dataLen: Array.isArray(d) ? d.length : d && typeof d === 'object' ? Object.keys(d).length : null,
+        topKeys: Object.keys(body || {}).slice(0, 24),
+      });
       return;
     }
 
