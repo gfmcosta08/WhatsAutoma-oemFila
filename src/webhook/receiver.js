@@ -20,6 +20,35 @@ function normalizeTelefone(from) {
 }
 
 /**
+ * Corrige números brasileiros que vêm sem o dígito 9.
+ * UazAPI às vezes entrega números sem o 9 inicial dos celulares.
+ */
+function fixBrazilianMobile(digits) {
+  let n = String(digits || '').replace(/\D/g, '');
+  if (!n) return n;
+
+  // Remove DDI 55 temporariamente para análise
+  let has55 = false;
+  let core = n;
+  if (n.startsWith('55') && n.length >= 12) {
+    has55 = true;
+    core = n.slice(2);
+  }
+
+  // core deve ter DDD + número
+  // Se tem 10 dígitos (DDD 2 + número 8), falta o 9
+  if (core.length === 10) {
+    core = core.slice(0, 2) + '9' + core.slice(2);
+  }
+  // Se tem 11 dígitos mas não começa com 9 após DDD, adiciona 9
+  else if (core.length === 11 && core[2] !== '9') {
+    core = core.slice(0, 2) + '9' + core.slice(2);
+  }
+
+  return has55 ? '55' + core : core;
+}
+
+/**
  * Extrai dígitos de um JID/endereço WhatsApp. Não usa @lid como telefone (API não entrega para @s.whatsapp.net).
  */
 function digitsFromAddressingJid(raw) {
@@ -443,6 +472,12 @@ router.post('/entrada/:token', express.json(), async (req, res) => {
   res.sendStatus(200);
 
   const { token } = req.params;
+  // Logging adicional para diagnóstico do webhook de entrada
+  logger.info('webhook-entrada', 'entrada webhook recebida (inbound)', {
+    token_prefix: token ? token.substring(0, 8) + '...' : null,
+    header_keys: Object.keys(req.headers || {}),
+    body_keys: Object.keys(req.body || {})
+  });
 
   logger.info('webhook-entrada', '=== WEBHOOK RECEBIDO ===', {
     token_prefix: token ? token.substring(0, 8) + '...' : null,
@@ -494,8 +529,17 @@ router.post('/entrada/:token', express.json(), async (req, res) => {
       })(),
     });
 
-    const telefone = extractPhoneFromUazapiBody(body);
+    const telefoneRaw = extractPhoneFromUazapiBody(body);
+    const telefone = fixBrazilianMobile(telefoneRaw);
     const texto = extractTextFromUazapiBody(body);
+
+    logger.info('webhook-entrada', 'telefone extraído', {
+      telefone_raw: telefoneRaw,
+      telefone_corrigido: telefone,
+      raw_length: telefoneRaw.length,
+      fixed_length: telefone.length,
+      texto_preview: texto ? texto.substring(0, 50) : null,
+    });
     const messageId =
       body.messageId ||
       body.message_id ||
