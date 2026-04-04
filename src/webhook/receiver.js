@@ -469,6 +469,11 @@ async function handleIncoming(payload) {
  * Webhook por instância (UazAPI / integradores). Token único por empresa.
  */
 router.post('/entrada/:token', express.json(), async (req, res) => {
+  console.log('[WEBHOOK DEBUG] Requisição recebida no endpoint /entrada/:token');
+  console.log('[WEBHOOK DEBUG] Params:', req.params);
+  console.log('[WEBHOOK DEBUG] Body keys:', Object.keys(req.body || {}));
+  console.log('[WEBHOOK DEBUG] IP:', req.ip);
+
   res.sendStatus(200);
 
   const { token } = req.params;
