@@ -14,19 +14,38 @@ async function run() {
   const needsSsl =
     url.includes('amazonaws.com') ||
     url.includes('render.com') ||
+    url.includes('onrender.com') ||
     process.env.PGSSLMODE === 'require';
   const client = new Client({ connectionString: url, ssl: needsSsl ? { rejectUnauthorized: false } : false });
   await client.connect();
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS _migrations (
+      filename VARCHAR(255) PRIMARY KEY,
+      applied_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
+
+  const { rows: applied } = await client.query('SELECT filename FROM _migrations');
+  const appliedSet = new Set(applied.map((r) => r.filename));
+
   const migDir = path.join(__dirname, '..', '..', 'src', 'database', 'migrations');
   const files = fs
     .readdirSync(migDir)
     .filter((f) => f.endsWith('.sql'))
     .sort();
+
   for (const f of files) {
+    if (appliedSet.has(f)) {
+      console.log('Migração já aplicada (ignorando):', f);
+      continue;
+    }
     const sql = fs.readFileSync(path.join(migDir, f), 'utf8');
     await client.query(sql);
+    await client.query('INSERT INTO _migrations (filename) VALUES ($1)', [f]);
     console.log('Migração aplicada:', f);
   }
+
   await client.end();
 }
 
