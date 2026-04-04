@@ -146,12 +146,18 @@ function isFromMeRoot(root) {
   if (!root || typeof root !== 'object') return false;
   if (root.key?.fromMe === true) return true;
   if (root.data?.key?.fromMe === true) return true;
+  // UazAPI v2 flat format
+  if (root.message?.fromMe === true) return true;
   return false;
 }
 
 function extractTextFromRoot(root) {
   if (!root || typeof root !== 'object') return '';
   const cand = [
+    // UazAPI v2 flat format
+    root.message?.text,
+    root.message?.content,
+    // Formato legado Baileys
     root.data?.message?.conversation,
     root.data?.message?.extendedTextMessage?.text,
     root.data?.message?.imageMessage?.caption,
@@ -194,7 +200,16 @@ function extractPhoneFromRoot(root) {
   if (!root || typeof root !== 'object') return '';
   if (isFromMeRoot(root)) return '';
 
+  // UazAPI v2 format: fromMe lives in root.message.fromMe
+  if (root.message && root.message.fromMe === true) return '';
+
   const cand = [
+    // UazAPI v2 flat format (sender_pn é o número real do remetente)
+    { label: 'message.sender_pn', v: root.message?.sender_pn },
+    { label: 'message.chatid', v: root.message?.chatid },
+    { label: 'chat.wa_chatid', v: root.chat?.wa_chatid },
+    { label: 'message.chatlid', v: root.message?.chatlid },
+    // Formato legado Baileys / antigo
     { label: 'data.key.remoteJidAlt', v: root.data?.key?.remoteJidAlt },
     { label: 'key.remoteJidAlt', v: root.key?.remoteJidAlt },
     { label: 'data.key.senderPn', v: root.data?.key?.senderPn },
@@ -553,17 +568,24 @@ router.post('/entrada/:token', express.json(), async (req, res) => {
       texto_preview: texto ? texto.substring(0, 50) : null,
     });
     const messageId =
+      body.message?.messageid ||   // UazAPI v2
+      body.message?.id ||          // UazAPI v2 alt
       body.messageId ||
       body.message_id ||
       body.id ||
       body.key?.id ||
       body.data?.messageId ||
       null;
-    const tsRaw = body.timestamp || body.ts || body.messageTimestamp || null;
+    const tsRaw =
+      body.message?.messageTimestamp ||  // UazAPI v2
+      body.timestamp || body.ts || body.messageTimestamp || null;
     const parsedTs = tsRaw != null && tsRaw !== '' ? parseWhatsAppTs(tsRaw) : null;
     const whatsapp_timestamp =
       parsedTs instanceof Date && !Number.isNaN(parsedTs.getTime()) ? parsedTs : new Date();
     const whatsapp_name =
+      body.message?.senderName ||   // UazAPI v2
+      body.chat?.wa_name ||          // UazAPI v2 alt
+      body.chat?.name ||
       body.profileName || body.profile_name || body.name || body.pushName || body.notifyName || null;
 
     if (!telefone) {
