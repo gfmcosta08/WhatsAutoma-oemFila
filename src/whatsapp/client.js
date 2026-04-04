@@ -107,6 +107,13 @@ function buildUazapiSendRequest(creds, to, text) {
 async function sendTextUazapi(to, text, opts = {}) {
   const fetchFn = typeof opts.fetch === 'function' ? opts.fetch : global.fetch;
   const creds = await whatsappRuntime.getUazapiSendCredentials();
+  console.log('[whatsapp] UazAPI creds check', {
+    hasBaseUrl: !!(creds.baseUrl),
+    hasInstanceToken: !!(creds.instanceToken),
+    baseUrl: creds.baseUrl,
+    instanceTokenPrefix: creds.instanceToken ? creds.instanceToken.substring(0, 8) + '...' : null,
+    authMode: creds.authMode,
+  });
 
   async function postDigits(num) {
     const built = buildUazapiSendRequestDigits(creds, num, text);
@@ -160,6 +167,7 @@ async function sendTextUazapi(to, text, opts = {}) {
 async function sendText(to, text, opts) {
   const o = opts || {};
   const provider = await whatsappRuntime.getProvider();
+  console.log('[whatsapp] sendText.provider:', provider);
   if (provider === 'meta') {
     return sendTextMeta(to, text, o);
   }

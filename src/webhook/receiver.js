@@ -333,6 +333,7 @@ async function handleIncomingOperador({ telefone, texto, whatsapp_message_id, wh
 
 async function handleIncomingCliente({ telefone, texto, whatsapp_message_id, whatsapp_timestamp, whatsapp_name }) {
   const t0 = Date.now();
+  logger.info('webhook-entrada', '=== HANDLE CLIENTE ===', { telefone: telefone ? telefone.substring(0, 6) + '***' : null });
   let cliente = await repos.findClienteByTelefone(telefone);
   if (!cliente) {
     cliente = await repos.insertCliente({ telefone, whatsapp_name });
@@ -417,8 +418,18 @@ async function handleIncomingCliente({ telefone, texto, whatsapp_message_id, wha
 
 async function handleIncoming(payload) {
   const { telefone, texto, whatsapp_message_id, whatsapp_timestamp, whatsapp_name } = payload;
-  if (!telefone) return;
-  if (await isTelefoneOperadorOuInstancia(telefone)) {
+  logger.info('webhook-entrada', 'handleIncoming chamado', {
+    telefone: telefone ? telefone.substring(0, 6) + '***' : null,
+    texto_preview: texto ? texto.substring(0, 50) : null,
+    whatsapp_message_id,
+  });
+  if (!telefone) {
+    logger.warn('webhook-entrada', 'telefone vazio - mensagem ignorada');
+    return;
+  }
+  const isOperador = await isTelefoneOperadorOuInstancia(telefone);
+  logger.info('webhook-entrada', 'tipo de remetente', { isOperador });
+  if (isOperador) {
     return handleIncomingOperador(payload);
   }
   return handleIncomingCliente(payload);
@@ -432,6 +443,12 @@ router.post('/entrada/:token', express.json(), async (req, res) => {
   res.sendStatus(200);
 
   const { token } = req.params;
+
+  logger.info('webhook-entrada', '=== WEBHOOK RECEBIDO ===', {
+    token_prefix: token ? token.substring(0, 8) + '...' : null,
+    body_keys: Object.keys(req.body || {}),
+    body_event: req.body?.event || req.body?.type || null,
+  });
 
   try {
     const empresa = await reposEmpresa.findEmpresaByToken(token);
