@@ -121,7 +121,16 @@ async function processarMensagem({ cliente, sessao, texto }) {
   }
 
   if (estado === ESTADO.SELECIONANDO_HORARIO) {
-    const { horario, label } = slotFromChoice(msg, ctx.slots);
+    if (!msg) {
+      respostas.push(slotsHorarioText(ctx.slots));
+      return { respostas, novoEstado: estado, novosDados: dados, historico: null };
+    }
+    const choice = slotFromChoice(msg, ctx.slots);
+    if (!choice) {
+      respostas.push(slotsHorarioText(ctx.slots));
+      return { respostas, novoEstado: estado, novosDados: dados, historico: null };
+    }
+    const { horario, label } = choice;
     novoEstado = ESTADO.DIGITANDO_SERVICO;
     novosDados = { ...dados, horario_selecionado: label, horario_iso: horario.toISOString(), ultimo_menu: 'DIGITANDO_SERVICO' };
     gravarHistorico(estado, novoEstado, msg, { slot: label });
@@ -185,7 +194,16 @@ async function processarMensagem({ cliente, sessao, texto }) {
   }
 
   if (estado === ESTADO.REAGENDANDO_HORARIO) {
-    const { horario, label } = slotFromChoice(msg, ctx.slots);
+    if (!msg) {
+      respostas.push(slotsHorarioText(ctx.slots));
+      return { respostas, novoEstado: estado, novosDados: dados, historico: null };
+    }
+    const choice = slotFromChoice(msg, ctx.slots);
+    if (!choice) {
+      respostas.push(slotsHorarioText(ctx.slots));
+      return { respostas, novoEstado: estado, novosDados: dados, historico: null };
+    }
+    const { horario, label } = choice;
     novoEstado = ESTADO.REAGENDANDO_DESCRICAO;
     novosDados = { ...dados, horario_selecionado: label, horario_iso: horario.toISOString(), reagendando: true };
     gravarHistorico(estado, novoEstado, msg, {});
