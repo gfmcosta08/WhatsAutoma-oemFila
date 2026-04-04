@@ -109,6 +109,18 @@ describe('Webhook UazAPI — parsing de entrada', () => {
     };
     assert.strictEqual(extractPhoneFromUazapiBody(body), '5511888776655');
   });
+
+  it('prefere candidato com 55 quando há múltiplos', () => {
+    const body = {
+      key: {
+        remoteJidAlt: '8118965629@s.whatsapp.net',
+        senderPn: '5581989656629@s.whatsapp.net',
+        fromMe: false,
+      },
+      message: { conversation: 'oi' },
+    };
+    assert.strictEqual(extractPhoneFromUazapiBody(body), '5581989656629');
+  });
 });
 
 describe('Envio UazAPI — montagem do pedido HTTP', () => {

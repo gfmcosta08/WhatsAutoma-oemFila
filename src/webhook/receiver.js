@@ -32,6 +32,35 @@ function digitsFromAddressingJid(raw) {
   return normalizeTelefone(local);
 }
 
+function scorePhoneCandidate(digits, label, raw) {
+  let score = 0;
+  const len = String(digits).length;
+  const r = String(raw || '').toLowerCase();
+  const l = String(label || '').toLowerCase();
+
+  if (digits.startsWith('55')) score += 30;
+  if (len === 12 || len === 13) score += 20; // BR típico: 55 + DDD + (8|9)
+  if (len >= 11 && len <= 15) score += 10; // E.164 sem '+'
+  if (len < 10 || len > 15) score -= 50;
+
+  if (r.includes('@s.whatsapp.net') || r.includes('@c.us')) score += 5;
+  if (l.includes('remotejidalt') || l.includes('senderpn') || l.includes('participantpn')) score += 5;
+  if (l.includes('participant')) score += 2;
+  if (l.includes('remotejid')) score += 1;
+
+  return score;
+}
+
+function maskJidForLog(v) {
+  if (v == null) return null;
+  const s = String(v);
+  const at = s.indexOf('@');
+  const domain = at >= 0 ? s.slice(at) : '';
+  const digits = (at >= 0 ? s.slice(0, at) : s).replace(/\D/g, '');
+  const last = digits ? digits.slice(-6) : '';
+  return last ? `***${last}${domain}` : domain || s.slice(0, 16);
+}
+
 /**
  * Evolution / UazAPI às vezes manda data como array ou data.messages[].
  * Gera objetos “raiz” para onde procurar key/message (ordem: mais específico primeiro).
@@ -133,34 +162,46 @@ function extractPhoneFromRoot(root) {
   if (isFromMeRoot(root)) return '';
 
   const cand = [
-    root.data?.key?.remoteJidAlt,
-    root.key?.remoteJidAlt,
-    root.data?.key?.senderPn,
-    root.key?.senderPn,
-    root.data?.key?.participant,
-    root.key?.participant,
-    root.data?.key?.remoteJid,
-    root.key?.remoteJid,
-    root.data?.from,
-    root.data?.sender,
-    root.remoteJid,
-    root.from,
-    root.telefone,
-    root.phone,
-    root.number,
-    root.sender,
-    root.chatId,
-    root.chat?.id,
-    root.payload?.from,
+    { label: 'data.key.remoteJidAlt', v: root.data?.key?.remoteJidAlt },
+    { label: 'key.remoteJidAlt', v: root.key?.remoteJidAlt },
+    { label: 'data.key.senderPn', v: root.data?.key?.senderPn },
+    { label: 'key.senderPn', v: root.key?.senderPn },
+    { label: 'data.key.participantPn', v: root.data?.key?.participantPn },
+    { label: 'key.participantPn', v: root.key?.participantPn },
+    { label: 'data.key.participantAlt', v: root.data?.key?.participantAlt },
+    { label: 'key.participantAlt', v: root.key?.participantAlt },
+    { label: 'data.key.participant', v: root.data?.key?.participant },
+    { label: 'key.participant', v: root.key?.participant },
+    { label: 'data.key.remoteJid', v: root.data?.key?.remoteJid },
+    { label: 'key.remoteJid', v: root.key?.remoteJid },
+    { label: 'data.from', v: root.data?.from },
+    { label: 'data.sender', v: root.data?.sender },
+    { label: 'remoteJid', v: root.remoteJid },
+    { label: 'from', v: root.from },
+    { label: 'telefone', v: root.telefone },
+    { label: 'phone', v: root.phone },
+    { label: 'number', v: root.number },
+    { label: 'sender', v: root.sender },
+    { label: 'chatId', v: root.chatId },
+    { label: 'chat.id', v: root.chat?.id },
+    { label: 'payload.from', v: root.payload?.from },
   ];
-  for (const c of cand) {
-    if (c == null || c === '') continue;
-    const s = String(c);
+
+  let best = '';
+  let bestScore = -Infinity;
+  for (const { label, v } of cand) {
+    if (v == null || v === '') continue;
+    const s = String(v);
     if (s.includes('@g.us') || s.toLowerCase().includes('broadcast')) continue;
     const n = s.includes('@') ? digitsFromAddressingJid(s) : normalizeTelefone(s);
-    if (n) return n;
+    if (!n) continue;
+    const sc = scorePhoneCandidate(n, label, s);
+    if (sc > bestScore) {
+      best = n;
+      bestScore = sc;
+    }
   }
-  return '';
+  return best || '';
 }
 
 function extractPhoneFromUazapiBody(body) {
@@ -408,9 +449,32 @@ router.post('/entrada/:token', express.json(), async (req, res) => {
     logger.info('webhook-entrada', 'payload recebido', {
       empresa_id: empresa.id,
       keys: Object.keys(body),
-      data_keys: body.data ? Object.keys(body.data) : null,
+      data_is_array: Array.isArray(body.data),
+      data_keys: Array.isArray(body.data)
+        ? body.data[0] && typeof body.data[0] === 'object'
+          ? Object.keys(body.data[0]).slice(0, 24)
+          : null
+        : body.data && typeof body.data === 'object'
+          ? Object.keys(body.data).slice(0, 24)
+          : null,
       event: body.event || body.type || null,
       fromMe: body.data?.key?.fromMe ?? body.key?.fromMe ?? null,
+      sample_jids: (() => {
+        try {
+          const first = eachUazapiExtractionRoot(body).next().value;
+          const k = (first && typeof first === 'object' ? first.key : null) || {};
+          return {
+            remoteJid: maskJidForLog(k.remoteJid),
+            remoteJidAlt: maskJidForLog(k.remoteJidAlt),
+            participant: maskJidForLog(k.participant),
+            participantPn: maskJidForLog(k.participantPn),
+            senderPn: maskJidForLog(k.senderPn),
+            from: maskJidForLog(first && first.from),
+          };
+        } catch {
+          return null;
+        }
+      })(),
     });
 
     const telefone = extractPhoneFromUazapiBody(body);
