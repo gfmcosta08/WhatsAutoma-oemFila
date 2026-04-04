@@ -27,7 +27,7 @@ Cada **deploy** deste repositório atende **um único cliente** (ex.: uma oficin
 
 ## Deploy
 
-Passo a passo (GitHub, Render, Replit): [`DEPLOY.md`](DEPLOY.md). Resumo Render: [`deploy.md`](deploy.md).
+Passo a passo (GitHub, Render, Replit): [`DEPLOY.md`](DEPLOY.md).
 
 ## Replit
 

@@ -23,7 +23,7 @@
 
 ## Deploy (Render)
 
-Repo: [gfmcosta08/automa-owhatsapp](https://github.com/gfmcosta08/automa-owhatsapp) — detalhes em [`deploy.md`](deploy.md).
+Repo: [gfmcosta08/WhatsAutoma-oemFila](https://github.com/gfmcosta08/WhatsAutoma-oemFila) — detalhes em [`DEPLOY.md`](DEPLOY.md).
 
 1. Repo no GitHub → Render **New → Blueprint** → `render.yaml`.
 2. Preencher manualmente: `WHATSAPP_*` (e `WHATSAPP_APP_SECRET` opcional).
