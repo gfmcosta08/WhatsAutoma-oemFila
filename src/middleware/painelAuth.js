@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const { verifySync } = require('otplib');
 const config = require('../config');
+const whatsappRuntime = require('../config/whatsappRuntime');
 const reposPainelUsuarios = require('../database/reposPainelUsuarios');
 const { verifyPassword } = require('../utils/password');
 
@@ -114,10 +115,17 @@ async function loginPainel(body = {}) {
 async function getPainelStatusPayload() {
   const cnt = await reposPainelUsuarios.count();
   const enabled = await painelAuthEnabledAsync();
+  const m = await whatsappRuntime.loadMerged();
+  const whatsapp_pode_enviar =
+    m.provider === 'uazapi'
+      ? !!(m.uazapiInstanceToken && String(m.uazapiInstanceToken).trim())
+      : !!(m.token && m.phoneNumberId);
   return {
     painel_auth_enabled: enabled,
     login_mode: cnt > 0 ? 'email' : 'password',
     usuarios_cadastrados: cnt,
+    whatsapp_provider: m.provider,
+    whatsapp_pode_enviar,
   };
 }
 

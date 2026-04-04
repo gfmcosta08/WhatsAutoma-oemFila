@@ -40,6 +40,11 @@ export type AgendamentoConfig = {
   vagas_por_slot?: number;
   horarios_bloqueados?: string[];
   painel_auth_enabled?: boolean;
+  login_mode?: string;
+  usuarios_cadastrados?: number;
+  whatsapp_provider?: string;
+  /** false = sem token Meta ou token de instância UazAPI para enviar mensagens */
+  whatsapp_pode_enviar?: boolean;
 };
 
 export type AccessFlags = {

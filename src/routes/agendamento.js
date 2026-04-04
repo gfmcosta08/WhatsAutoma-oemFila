@@ -38,6 +38,7 @@ router.get('/access', (req, res) => {
 
 router.get('/config', async (req, res) => {
   try {
+    await repos.ensureDefaultConfig();
     const row = await repos.getConfig();
     if (!row) return res.json(null);
     res.json({

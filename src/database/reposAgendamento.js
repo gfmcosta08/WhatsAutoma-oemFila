@@ -21,6 +21,17 @@ async function getConfig() {
   return r.rows[0] || null;
 }
 
+/** Garante linha em agendamento_config (a migração 002 só cria a tabela). */
+async function ensureDefaultConfig() {
+  await query(
+    `INSERT INTO agendamento_config (empresa_id, jid_operador, horarios_disponiveis, mensagem_boas_vindas,
+      aprovacao_automatica, vagas_por_slot, horarios_bloqueados)
+     SELECT $1, NULL, '[]'::jsonb, '', false, 1, '[]'::jsonb
+     WHERE NOT EXISTS (SELECT 1 FROM agendamento_config WHERE empresa_id = $1)`,
+    [EMPRESA_ID]
+  );
+}
+
 async function upsertConfig({
   jid_operador,
   horarios_disponiveis,
@@ -171,6 +182,7 @@ async function getServicoById(id) {
 module.exports = {
   EMPRESA_ID,
   getConfig,
+  ensureDefaultConfig,
   upsertConfig,
   listPendentes,
   listAgendamentos,
