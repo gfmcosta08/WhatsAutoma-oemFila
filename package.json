@@ -11,6 +11,7 @@
     "bootstrap:painel": "node scripts/bootstrap-painel-admin.js",
     "build": "npm install && npm run migrate",
     "build:replit": "npm install && npm install --prefix web && npm run migrate && cross-env NEXT_PUBLIC_SAME_ORIGIN_API=1 npm run build --prefix web",
+    "build:render": "npm install && npm install --prefix web && npm run migrate && cd web && npm run build",
     "dev:web": "npm run dev --prefix web",
     "dev:api": "node src/index.js",
     "dev:local": "powershell -ExecutionPolicy Bypass -File scripts/dev-local.ps1"
