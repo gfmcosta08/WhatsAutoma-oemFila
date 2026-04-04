@@ -2,77 +2,165 @@
 
 Última atualização: **2026-04-04**.
 
-## Contexto do problema atual
+---
 
-- Sintoma reportado: **bot não responde no WhatsApp**.
-- O usuário confirmou envio de várias mensagens, recadastro da UazAPI e testes repetidos.
-- No fim da sessão, os logs compartilhados eram apenas de **build/deploy** do Render (sem eventos de webhook em runtime no recorte enviado).
+## Problema Principal
 
-## O que foi implementado nesta rodada (ordem cronológica)
+**Bot não responde a mensagens no WhatsApp.**
 
-### 1) Configuração do painel / deploy
+O usuário envia mensagens de outro número para o número automatizado (instância UazAPI `farollbr.uazapi.com`), mas o bot não retorna resposta.
 
-- `0ae71a6` — `AdminConfigSection` com login inline e URL única de webhook.
-- `96d68e4`, `326c983`, `d8a1749` — correções de build Render/Next (`build:render`, alias `@`, devDeps do `web` para Tailwind).
-- `render.yaml` ajustado para variáveis do fluxo WhatsApp e deploy consistente.
+### Fluxo Esperado
 
-### 2) Banco e estado de configuração
+```
+Usuário → WhatsApp → UazAPI (farollbr.uazapi.com) → Webhook POST → Render API → Processamento → Resposta via UazAPI → Usuário
+```
 
-- `dd50ea6` — migração 002 mais tolerante.
-- `83e46fb` — seed/garantia de `agendamento_config` (`empresa_id=1`) e banner do painel alinhado com estado de credenciais.
-- `008_agendamento_config_seed.sql` criado.
+### O Que Foi Confirmado
 
-### 3) Webhook / parser de entrada UazAPI
+- **Webhook chegou uma vez** — logs de runtime mostraram:
+  ```
+  [webhook-entrada] === WEBHOOK RECEBIDO ===
+  [webhook-entrada] payload recebido
+  [webhook-entrada] processando mensagem
+  [webhook-entrada] handleIncoming chamado
+  [notify] ENVIANDO MENSAGEM WHATSAPP
+  [whatsapp] sendText.provider: uazapi
+  [whatsapp] UazAPI creds check { hasBaseUrl: true, hasInstanceToken: true, baseUrl: 'https://farollbr.uazapi.com' }
+  [whatsapp] erro envio UazAPI 500 { error: 'the number 8118965629@s.whatsapp.net is not on WhatsApp' }
+  [whatsapp] erro envio UazAPI após retry 55 500 { error: 'the number 558118965629@s.whatsapp.net is not on WhatsApp' }
+  ```
+- **Credenciais UazAPI estão corretas** — `UAZAPI_BASE_URL`, `UAZAPI_INSTANCE_TOKEN`, `UAZAPI_INSTANCE_PHONE` configuradas nas env vars da Render.
+- **URL do webhook**: `https://whatsautoma-oemfila.onrender.com/webhook/entrada/a28c55ed3415125f47db62015a063ab480e856a2d1bb1487aea8a518b057064b`
+- **Instância UazAPI**: `https://farollbr.uazapi.com`
 
-- `0082d40` — suporte inicial para formato Evolution (`data.key.remoteJid`, `message.conversation`) e filtro `fromMe`.
-- `dbfcb9b` — suporte a `data[]`, `data.messages[]`, resiliência de Redis (erro de cache não impede resposta), logs melhores de erro de envio.
-- `9b3c7b2` — suporte a `remoteJidAlt` / `senderPn`, ignorando `@lid` como telefone final.
-- `6710406` — heurística por score para escolher melhor candidato de telefone (inclui `participantPn`), com `sample_jids` mascarado em log para diagnóstico.
+### O Que Está Acontecendo Agora
 
-### 4) Envio UazAPI (saída)
+Após múltiplos deploys, **nenhum webhook chega ao servidor**. Os logs da Render mostram apenas build/deploy, sem nenhuma linha de runtime com `webhook-entrada` ou `[WEBHOOK DEBUG]`.
 
-- `2a92359` — retry automático com prefixo `55` quando a UazAPI responde **"not on WhatsApp"** para número 10–11 dígitos.
-- `d0cb348` — documentação em `.env.example` sobre o retry e `WHATSAPP_DEFAULT_CC`.
+**Duas hipóteses:**
+1. **A UazAPI parou de enviar webhooks** — a instância pode ter sido reiniciada/reconectada e as configurações de webhook foram resetadas. O usuário confirma que o webhook está configurado no painel, mas os logs não mostram chegada.
+2. **O webhook chega mas os logs não estão sendo capturados** — o usuário pode estar enviando apenas Build Logs em vez de Runtime Logs no painel da Render.
 
-## Evidências coletadas durante debug
+---
 
-- Em momento anterior, o runtime mostrou:
-  - `[webhook-entrada] payload recebido`
-  - `[webhook-entrada] processando mensagem`
-  - `[whatsapp] erro envio UazAPI ... not on WhatsApp`
-  - `[webhook] mensagem processada`
-- Isso comprovou que o fluxo interno executava, mas a UazAPI recusava o destino (JID/número).
-- Após novos ajustes, o usuário reportou não ver diferenças no log, mas os recortes enviados ficaram em **Build Logs**, sem eventos de runtime para fechar diagnóstico final.
+## O Que Foi Feito Nesta Sessão (ordem cronológica)
 
-## Estado atual (aberto)
+### 1. Correção de números brasileiros sem dígito 9 (`fixBrazilianMobile`)
+- **Arquivo**: `src/webhook/receiver.js`
+- **Problema**: A UazAPI enviava números como `8118965629` (10 dígitos) ao invés de `558198965629` (13 dígitos). Faltava o `9` dos celulares BR.
+- **Solução**: Função `fixBrazilianMobile()` adicionada para detectar e corrigir automaticamente.
 
-- O código está com parser e envio mais robustos.
-- O bloqueio atual é operacional/observabilidade:
-  - não há, no recorte final compartilhado, linhas de runtime com `webhook-entrada` para confirmar entrega do webhook;
-  - sem essas linhas, não dá para afirmar se o problema está em:
-    1) UazAPI não disparando webhook,
-    2) endpoint/token inválido no webhook,
-    3) envio recusado pela UazAPI por JID/telefone.
+### 2. Aceitação de JIDs `@lid` (Linked Device)
+- **Arquivo**: `src/webhook/receiver.js`
+- **Problema**: A função `digitsFromAddressingJid()` descartava completamente números em formato `@lid`, que a UazAPI pode enviar.
+- **Solução**: Removida a verificação `if (lower.endsWith('@lid')) return '';`. Agora extrai os dígitos mesmo de `@lid`.
 
-## Próximos passos objetivos (quando retomar)
+### 3. Proteção contra duplicação do dígito 9
+- **Arquivo**: `src/webhook/receiver.js`
+- **Problema**: `fixBrazilianMobile` poderia adicionar `9` duplicado em números já corretos.
+- **Solução**: Adicionada verificação `if (n.startsWith('55') && n.length === 13 && n[4] === '9') return n;`.
 
-1. Abrir **Runtime Logs** no Render (não Build Logs), filtrar por `webhook-entrada`.
-2. Enviar mensagem de teste e coletar:
-   - `[webhook-entrada] payload recebido` (com `sample_jids`)
-   - `[webhook-entrada] processando mensagem`
-   - qualquer `[whatsapp] erro envio UazAPI...`
-3. No painel UazAPI, validar:
-   - webhook exato: `https://whatsautoma-oemfila.onrender.com/webhook/entrada/<token>`
-   - eventos de mensagem habilitados (`messages.upsert`/equivalente)
-   - instância em `connected`
-4. Se houver nova rejeição de número, usar `sample_jids` para ajustar prioridade dos campos do payload de forma definitiva.
+### 4. Timeout no fetch (15 segundos)
+- **Arquivo**: `src/whatsapp/client.js`
+- **Problema**: Requisições HTTP para a UazAPI podiam ficar penduradas indefinidamente.
+- **Solução**: Função `fetchWithTimeout()` com `AbortController` e 15s de timeout.
 
-## Deploy/infra (referência)
+### 5. Proteção contra baseUrl malformado
+- **Arquivo**: `src/whatsapp/client.js`
+- **Problema**: `new URL(url)` lançava exceção não tratada se `baseUrl` fosse inválido, crashando o webhook handler.
+- **Solução**: Validação `if (!base || !base.startsWith('http'))` + try/catch no `new URL()`.
 
-- Repositório: [gfmcosta08/WhatsAutoma-oemFila](https://github.com/gfmcosta08/WhatsAutoma-oemFila)
-- URL principal: `https://whatsautoma-oemfila.onrender.com`
-- `render.yaml` atualizado com opção:
-  - `WHATSAPP_DEFAULT_CC` (opcional; recomendado `55` para contexto BR)
+### 6. Try/catch em todas as requisições HTTP
+- **Arquivo**: `src/whatsapp/client.js`
+- **Problema**: Erros de rede e timeout não eram tratados.
+- **Solução**: Blocos try/catch em `postDigits()` e `sendTextMeta()`.
+
+### 7. Logs de diagnóstico adicionados
+- **Arquivos**: `src/webhook/receiver.js`, `src/whatsapp/notify.js`, `src/whatsapp/client.js`
+- Logs em:
+  - Entrada do webhook (`[WEBHOOK DEBUG]`, `=== WEBHOOK RECEBIDO ===`)
+  - Extração de telefone (`telefone_raw`, `telefone_corrigido`)
+  - Envio de mensagem (`ENVIANDO MENSAGEM WHATSAPP`, `RESULTADO ENVIO`)
+  - Credenciais UazAPI (`UazAPI creds check`)
+
+### 8. UAZAPI_BASE_URL fixado no render.yaml
+- **Arquivo**: `render.yaml`
+- Definido `UAZAPI_BASE_URL: https://farollbr.uazapi.com` diretamente no blueprint.
+
+---
+
+## Commits desta Sessão
+
+| Commit | Descrição |
+|--------|-----------|
+| `a2397ee` | add debug logs for webhook troubleshooting |
+| `8b9ea2c` | render: set UAZAPI_BASE_URL to farollbr.uazapi.com |
+| `3010ad0` | fix: correct Brazilian mobile numbers missing digit 9 |
+| `f79247c` | enhance: add more diagnostic info to webhook inbound log |
+| `25ee9f9` | debug: add console.log at webhook entry |
+| `9976c6c` | fix: critical webhook fixes - @lid JID support, mobile number fix, fetch timeout, error handling |
+
+---
+
+## Estado Atual do Código
+
+### Arquivos Modificados
+- `src/webhook/receiver.js` — parser de entrada UazAPI com correção de números BR, @lid support, logs de diagnóstico
+- `src/whatsapp/client.js` — timeout no fetch, proteção contra baseUrl inválido, try/catch
+- `src/whatsapp/notify.js` — logs de envio
+- `render.yaml` — UAZAPI_BASE_URL fixado
+
+### Arquivo de Entrada
+- O servidor roda via `node src/replit-serve.js` (API Express + Next.js na mesma porta)
+
+### Endpoints Relevantes
+- `POST /webhook/entrada/:token` — webhook UazAPI (principal)
+- `GET/POST /webhook/whatsapp` — webhook Meta (legado, não usado)
+- `GET /health` — health check
+
+---
+
+## O Que a Próxima IA Precisa Fazer
+
+### Passo 1 — Confirmar se o webhook está chegando
+- O usuário precisa enviar **Runtime Logs** (não Build Logs) da Render após enviar uma mensagem de teste.
+- Procurar por `WEBHOOK DEBUG` ou `webhook-entrada` nos logs.
+- Se **NÃO aparecer**: o problema é na UazAPI — ela não está enviando webhooks para o servidor.
+- Se **APARECER**: o problema está no processamento ou envio.
+
+### Passo 2 — Se o webhook NÃO está chegando
+- Verificar no painel da UazAPI (`farollbr.uazapi.com`):
+  - A instância está conectada?
+  - O webhook está ATIVO (toggles ligados)?
+  - A URL está correta?
+  - Eventos de mensagem estão habilitados?
+- Tentar desativar e reativar o webhook no painel.
+- Testar com um webhook tester (webhook.site) para confirmar que a UazAPI está enviando.
+
+### Passo 3 — Se o webhook ESTÁ chegando
+- Verificar os logs de `telefone_raw` e `telefone_corrigido` para confirmar extração correta.
+- Verificar `UazAPI creds check` para confirmar credenciais.
+- Verificar `RESULTADO ENVIO` para ver se o envio funcionou ou falhou.
+- Se falhar com `not on WhatsApp`, o número pode estar em formato errado ou a instância UazAPI pode não ter permissão para enviar para aquele número.
+
+### Passo 4 — Possível problema de authMode
+- O log mostrou `authMode: 'query'` mas o domínio é `farollbr.uazapi.com` (produção, não `.uazapi.dev`).
+- A função `resolveUazapiAuthMode` em `whatsappRuntime.js:100-113` retorna `query` para domínios que não são `*.uazapi.dev`.
+- Se a UazAPI v2 espera auth por **header** mas está usando **query**, o envio falha com 401/403.
+- **Solução potencial**: forçar `UAZAPI_AUTH_MODE=header` nas env vars da Render.
+
+---
+
+## Infraestrutura
+
+- **Repositório**: [gfmcosta08/WhatsAutoma-oemFila](https://github.com/gfmcosta08/WhatsAutoma-oemFila)
+- **URL principal**: `https://whatsautoma-oemfila.onrender.com`
+- **UazAPI**: `https://farollbr.uazapi.com`
+- **Webhook URL**: `https://whatsautoma-oemfila.onrender.com/webhook/entrada/a28c55ed3415125f47db62015a063ab480e856a2d1bb1487aea8a518b057064b`
+- **Runtime**: Node.js 25.9.0, Express + Next.js 14.2.35
+- **Banco**: PostgreSQL (Render managed)
+- **Cache**: Redis (Render managed)
 
 ---
 

@@ -26,6 +26,38 @@ const DIA_LABEL = {
   sab: 'Sáb',
 };
 
+// Aliases NLP por dia da semana (sem acentos, lowercase, ordenados do mais longo para o mais curto)
+const NLP_DAY_ALIASES = {
+  0: ['domingo', 'dom'],
+  1: ['segunda feira', 'segunda-feira', 'segunda', 'seg'],
+  2: ['terca feira', 'terca-feira', 'terca', 'ter'],
+  3: ['quarta feira', 'quarta-feira', 'quarta', 'qua'],
+  4: ['quinta feira', 'quinta-feira', 'quinta', 'qui'],
+  5: ['sexta feira', 'sexta-feira', 'sexta', 'sex'],
+  6: ['sabado', 'sab'],
+};
+
+/**
+ * Normaliza string para comparação NLP: lowercase, sem acentos, hífens → espaço.
+ */
+function normalizeStrNlp(s) {
+  return String(s || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[-_]/g, ' ')
+    .trim();
+}
+
+/**
+ * Retorna o dia da semana (0=dom…6=sab) do slot baseado em daysFromNow.
+ */
+function slotDow(s) {
+  const dt = new Date();
+  dt.setDate(dt.getDate() + (s.daysFromNow || 0));
+  return dt.getDay();
+}
+
 function parseHoraStr(horaStr) {
   const m = String(horaStr || '').trim().match(/^(\d{1,2}):(\d{2})$/);
   if (!m) return null;
@@ -123,19 +155,127 @@ function parseHorariosConfig(raw) {
   return out.length ? out : DEFAULT_SLOTS;
 }
 
-function slotFromChoice(opcao, slots) {
-  const n = parseInt(String(opcao).trim(), 10);
-  const list = slots && slots.length ? slots : DEFAULT_SLOTS;
-  const s = list.find((x) => x.n === n) || list[0];
-  const dt = new Date();
-  dt.setDate(dt.getDate() + s.daysFromNow);
-  dt.setHours(s.hour, s.minute || 0, 0, 0);
-  return { horario: dt, label: s.label };
+/**
+ * Interpreta texto em linguagem natural e retorna o slot correspondente.
+ * Entende: "segunda", "seg", "seg 8", "segunda-feira as 8", "ter 09:00", etc.
+ * Retorna o slot ou null se não reconhecer.
+ */
+function slotFromNlp(texto, slots) {
+  if (!texto || !slots || !slots.length) return null;
+  const norm = normalizeStrNlp(texto);
+
+  // 1. Encontrar dia da semana (testa aliases do maior para menor para evitar match parcial)
+  let targetDow = null;
+  outer: for (const [dowStr, aliases] of Object.entries(NLP_DAY_ALIASES)) {
+    for (const alias of aliases) {
+      // Precisa ser palavra inteira (início, fim ou cercada por espaços/as)
+      const re = new RegExp('(?:^|\\s)' + alias.replace(/ /g, '\\s+') + '(?:\\s|$)');
+      if (re.test(norm)) {
+        targetDow = Number(dowStr);
+        break outer;
+      }
+    }
+  }
+  if (targetDow === null) return null;
+
+  // 2. Extrair hora (opcional) — aceita: "8", "8h", "8:00", "08:30", "14"
+  const hourMatch = norm.match(/\b(\d{1,2})(?::(\d{2}))?\s*h?\b/);
+  const targetHour = hourMatch ? parseInt(hourMatch[1], 10) : null;
+  const targetMinute = hourMatch && hourMatch[2] ? parseInt(hourMatch[2], 10) : 0;
+
+  // 3. Filtrar slots pelo dia da semana
+  const daySlots = slots.filter(s => slotDow(s) === targetDow);
+  if (!daySlots.length) return null;
+
+  if (targetHour !== null) {
+    // Tenta match exato hora + minuto
+    const exact = daySlots.find(s => s.hour === targetHour && (s.minute || 0) === targetMinute);
+    if (exact) return exact;
+    // Tenta match só pela hora
+    const hourOnly = daySlots.find(s => s.hour === targetHour);
+    if (hourOnly) return hourOnly;
+  }
+
+  // Sem hora especificada: retorna primeiro slot do dia
+  return daySlots[0];
 }
 
+/**
+ * Exibe horários agrupados por dia em blocos limpos.
+ * Exemplo:
+ *   *Segunda-feira*
+ *   08:00
+ *   14:00
+ *
+ *   *Terça-feira*
+ *   09:00
+ */
 function slotsHorarioText(slots) {
   const list = slots && slots.length ? slots : DEFAULT_SLOTS;
-  return `Escolha o horário (número):\n\n${list.map((s) => `${s.n}) ${s.label}`).join('\n')}`;
+  const now = new Date();
+
+  // Agrupar por dia calendário
+  const byDay = new Map(); // "Dia da Semana" → slots[]
+  for (const s of list) {
+    const dt = new Date(now);
+    dt.setDate(now.getDate() + (s.daysFromNow || 0));
+    const weekday = dt.toLocaleDateString('pt-BR', { weekday: 'long' });
+    const dayStr = weekday.charAt(0).toUpperCase() + weekday.slice(1);
+    if (!byDay.has(dayStr)) byDay.set(dayStr, []);
+    byDay.get(dayStr).push(s);
+  }
+
+  const lines = [];
+  for (const [dayStr, daySlots] of byDay) {
+    lines.push(`*${dayStr}*`);
+    for (const s of daySlots) {
+      const hh = String(s.hour).padStart(2, '0');
+      const mm = String(s.minute || 0).padStart(2, '0');
+      lines.push(`${hh}:${mm}`);
+    }
+    lines.push('');
+  }
+  lines.push('_Digite o dia e horário. Ex: "segunda 08:00"_');
+
+  return lines.join('\n');
+}
+
+/**
+ * Converte a escolha do usuário (número ou texto NLP) em { horario: Date, label: string }.
+ * Retorna null se não reconhecer a entrada.
+ */
+function slotFromChoice(opcao, slots) {
+  const list = slots && slots.length ? slots : DEFAULT_SLOTS;
+  const str = String(opcao || '').trim();
+
+  // 1. Seleção por número
+  const n = parseInt(str, 10);
+  if (Number.isFinite(n) && n > 0 && String(n) === str) {
+    const byNum = list.find(x => x.n === n);
+    if (byNum) {
+      const dt = new Date();
+      dt.setDate(dt.getDate() + byNum.daysFromNow);
+      dt.setHours(byNum.hour, byNum.minute || 0, 0, 0);
+      return { horario: dt, label: byNum.label };
+    }
+  }
+
+  // 2. NLP: texto livre ("segunda 8", "ter 09:00", etc.)
+  const nlp = slotFromNlp(str, list);
+  if (nlp) {
+    const dt = new Date();
+    dt.setDate(dt.getDate() + nlp.daysFromNow);
+    dt.setHours(nlp.hour, nlp.minute || 0, 0, 0);
+    const hh = String(nlp.hour).padStart(2, '0');
+    const mm = String(nlp.minute || 0).padStart(2, '0');
+    const weekday = dt.toLocaleDateString('pt-BR', { weekday: 'long' });
+    const dayStr = weekday.charAt(0).toUpperCase() + weekday.slice(1);
+    const label = nlp.label || `${dayStr} ${hh}:${mm}`;
+    return { horario: dt, label };
+  }
+
+  // Sem match
+  return null;
 }
 
 const DOW_TO_DIA = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sab'];
@@ -234,6 +374,7 @@ function concreteSlotsFromConfig(rawHorarios, numDays = 14) {
 module.exports = {
   parseHorariosConfig,
   slotFromChoice,
+  slotFromNlp,
   slotsHorarioText,
   DEFAULT_SLOTS,
   concreteSlotsFromConfig,
