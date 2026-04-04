@@ -1,0 +1,20 @@
+# Replit — https://docs.replit.com/replit-app/configuration
+modules = ["nodejs-20"]
+
+run = "npm run start:replit"
+
+[nix]
+channel = "stable-24_05"
+
+[deployment]
+run = ["npm", "run", "start:replit"]
+build = ["npm", "run", "build:replit"]
+
+[[ports]]
+localPort = 3000
+externalPort = 80
+
+[env]
+SAME_ORIGIN_NEXT = "true"
+# Garante `next dev` no Repl com API relativa (além do build:replit que já define no script)
+NEXT_PUBLIC_SAME_ORIGIN_API = "1"

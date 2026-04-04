@@ -1,0 +1,36 @@
+{
+  "name": "lavajato-whatsapp",
+  "version": "1.0.0",
+  "description": "Lavajato — WhatsApp + agendamento web",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "start:replit": "node src/replit-serve.js",
+    "test": "node --test tests/whatsapp.test.js",
+    "migrate": "node scripts/migrations/run.js",
+    "bootstrap:painel": "node scripts/bootstrap-painel-admin.js",
+    "build": "npm install && npm run migrate",
+    "build:replit": "npm install && npm install --prefix web && npm run migrate && cross-env NEXT_PUBLIC_SAME_ORIGIN_API=1 npm run build --prefix web",
+    "dev:web": "npm run dev --prefix web",
+    "dev:api": "node src/index.js",
+    "dev:local": "powershell -ExecutionPolicy Bypass -File scripts/dev-local.ps1"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "ioredis": "^5.4.1",
+    "multer": "^1.4.5-lts.1",
+    "node-cron": "^3.0.3",
+    "otplib": "^13.4.0",
+    "pg": "^8.13.0",
+    "uuid": "^10.0.0",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "cross-env": "^7.0.3"
+  }
+}

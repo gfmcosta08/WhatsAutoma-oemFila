@@ -1,0 +1,56 @@
+# Blueprint Render — https://render.com/docs/blueprint-spec
+# New > Blueprint > conecte gfmcosta08/automa-owhatsapp
+
+databases:
+  - name: oficina-db
+    databaseName: oficina
+    user: oficina
+
+services:
+  - type: keyvalue
+    name: oficina-redis
+    ipAllowList:
+      - source: 0.0.0.0/0
+        description: internal
+
+  - type: web
+    name: oficina-whatsapp
+    runtime: node
+    region: oregon
+    buildCommand: npm install && npm run migrate
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "20.11.0"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: oficina-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: oficina-redis
+          property: connectionString
+      - key: WHATSAPP_PROVIDER
+        value: auto
+      - key: UAZAPI_BASE_URL
+        sync: false
+      - key: UAZAPI_AUTH_MODE
+        value: auto
+      - key: UAZAPI_INSTANCE_TOKEN
+        sync: false
+      - key: UAZAPI_ADMIN_TOKEN
+        sync: false
+      - key: UAZAPI_INSTANCE_PHONE
+        sync: false
+      - key: WHATSAPP_TOKEN
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: WHATSAPP_VERIFY_TOKEN
+        sync: false
+      - key: WHATSAPP_APP_SECRET
+        sync: false
+      - key: INTERNAL_NOTIFY_SECRET
+        generateValue: true
