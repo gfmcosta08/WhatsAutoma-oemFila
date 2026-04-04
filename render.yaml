@@ -34,6 +34,9 @@ services:
           property: connectionString
       - key: WHATSAPP_PROVIDER
         value: auto
+      # Brasil: use 55 se o webhook vier sem DDI (10–11 dígitos). sync: false = defina no painel se precisar.
+      - key: WHATSAPP_DEFAULT_CC
+        sync: false
       - key: UAZAPI_BASE_URL
         sync: false
       - key: UAZAPI_AUTH_MODE
