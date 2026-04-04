@@ -53,10 +53,6 @@ async function processarMensagem({ cliente, sessao, texto }) {
 
   if (estado === ESTADO.AGUARDANDO_NOME) {
     if (!msg) {
-      if (ctx.mensagemBoasVindas && ctx.mensagemBoasVindas.trim()) {
-        respostas.push(ctx.mensagemBoasVindas.trim());
-        return { respostas, novoEstado: estado, novosDados: dados, historico: null };
-      }
       respostas.push('Por favor, envie seu nome.');
       return { respostas, novoEstado: estado, novosDados: dados, historico: null };
     }
