@@ -473,10 +473,13 @@ router.post('/entrada/:token', express.json(), async (req, res) => {
 
   const { token } = req.params;
   // Logging adicional para diagnóstico do webhook de entrada
-  logger.info('webhook-entrada', 'entrada webhook recebida (inbound)', {
+  logger.info('webhook-entrada', '=== WEBHOOK RECEBIDO (INBOUND) ===', {
     token_prefix: token ? token.substring(0, 8) + '...' : null,
+    method: req.method,
     header_keys: Object.keys(req.headers || {}),
-    body_keys: Object.keys(req.body || {})
+    body_keys: Object.keys(req.body || {}),
+    ip: req.ip || req.connection?.remoteAddress,
+    timestamp: new Date().toISOString(),
   });
 
   logger.info('webhook-entrada', '=== WEBHOOK RECEBIDO ===', {
