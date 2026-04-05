@@ -8,6 +8,26 @@ const T = require('../whatsapp/templates');
 const { parseHorariosConfig, slotFromChoice, slotsHorarioText } = require('./horariosHelper');
 const { notifyGerenteNovoPendente } = require('./operadorFlow');
 
+// Palavras que reiniciam o fluxo independente do estado atual
+const RESTART_WORDS = new Set([
+  'oi', 'olá', 'ola', 'oii', 'oiii', 'hey', 'hi',
+  'menu', 'inicio', 'início', 'comecar', 'começar', 'reiniciar', 'recomeçar', 'recomecar',
+  'bom dia', 'boa tarde', 'boa noite', 'bom dia!', 'boa tarde!', 'boa noite!',
+  'oi!', 'olá!', 'ola!',
+]);
+
+function isRestartMessage(msg) {
+  const norm = String(msg || '').toLowerCase().trim().replace(/!+$/, '');
+  return RESTART_WORDS.has(norm);
+}
+
+// Estados que NÃO devem ser interrompidos por restart (usuário está no meio de um fluxo crítico)
+const ESTADOS_NAO_INTERROMPIVEIS = new Set([
+  ESTADO.CONFIRMANDO_AGENDAMENTO,
+  ESTADO.REAGENDANDO_DESCRICAO,
+  ESTADO.CANCELANDO_MOTIVO,
+]);
+
 function getDados(sessao) {
   const d = sessao.dados_temporarios;
   if (d && typeof d === 'object') return { ...d };
@@ -66,6 +86,18 @@ async function processarMensagem({ cliente, sessao, texto }) {
 
   // Menu principal — usa mensagem_boas_vindas se configurada, senão fallback hardcoded
   const menuPrincipal = ctx.mensagemBoasVindas || T.menuSemAgendamento(ctx.nomeMarca);
+
+  // Reinício do fluxo: saudação ou palavra-chave de menu reinicia independente do estado
+  if (isRestartMessage(msg) && !ESTADOS_NAO_INTERROMPIVEIS.has(estado)) {
+    if (!cliente.nome && cliente.whatsapp_name) {
+      await repos.updateClienteNome(clienteId, cliente.whatsapp_name);
+    }
+    const ativo = await repos.findAgendamentoAtivoPorCliente(clienteId);
+    const novoEstadoRestart = ativo ? ESTADO.MENU_COM_AGENDAMENTO : ESTADO.MENU_SEM_AGENDAMENTO;
+    gravarHistorico(estado, novoEstadoRestart, msg, { restart: true });
+    respostas.push(ativo ? T.menuComAgendamento(ctx.nomeMarca) : menuPrincipal);
+    return { respostas, novoEstado: novoEstadoRestart, novosDados: {}, historico };
+  }
 
   if (estado === ESTADO.AGUARDANDO_NOME) {
     // Não pede nome — usa nome do WhatsApp automaticamente
