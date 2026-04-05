@@ -8,7 +8,7 @@ const T = require('../whatsapp/templates');
 const { parseHorariosConfig, slotFromChoice, slotsHorarioText, getDaySlotsForNlp } = require('./horariosHelper');
 const { notifyGerenteNovoPendente } = require('./operadorFlow');
 
-// Palavras que reiniciam o fluxo independente do estado atual
+// Palavras que reiniciam o fluxo com saudação
 const RESTART_WORDS = new Set([
   'oi', 'olá', 'ola', 'oii', 'oiii', 'hey', 'hi',
   'menu', 'inicio', 'início', 'comecar', 'começar', 'reiniciar', 'recomeçar', 'recomecar',
@@ -16,17 +16,43 @@ const RESTART_WORDS = new Set([
   'oi!', 'olá!', 'ola!',
 ]);
 
+// Palavras que cancelam explicitamente a interação em curso
+const CANCEL_WORDS = new Set([
+  'cancelar', 'cancel', 'sair', 'parar', 'pare', 'para',
+  'voltar', 'volta', 'desistir', 'desisto', 'encerrar', 'fechar',
+  '0', '#', '*',
+]);
+
 function isRestartMessage(msg) {
   const norm = String(msg || '').toLowerCase().trim().replace(/!+$/, '');
   return RESTART_WORDS.has(norm);
 }
 
-// Estados que NÃO devem ser interrompidos por restart (usuário está no meio de um fluxo crítico)
+function isCancelMessage(msg) {
+  const norm = String(msg || '').toLowerCase().trim().replace(/!+$/, '');
+  return CANCEL_WORDS.has(norm);
+}
+
+// Estados que NÃO devem ser interrompidos por restart/cancel silencioso
 const ESTADOS_NAO_INTERROMPIVEIS = new Set([
   ESTADO.CONFIRMANDO_AGENDAMENTO,
   ESTADO.REAGENDANDO_DESCRICAO,
   ESTADO.CANCELANDO_MOTIVO,
 ]);
+
+// Estados intermediários onde o timeout de inatividade se aplica
+const ESTADOS_COM_FLUXO_ATIVO = new Set([
+  ESTADO.SELECIONANDO_SERVICO,
+  ESTADO.SELECIONANDO_HORARIO,
+  ESTADO.CONFIRMANDO_AGENDAMENTO,
+  ESTADO.DIGITANDO_SERVICO,
+  ESTADO.REAGENDANDO_HORARIO,
+  ESTADO.REAGENDANDO_DESCRICAO,
+  ESTADO.CANCELANDO_MOTIVO,
+]);
+
+// Timeout de inatividade: 5 minutos
+const INATIVIDADE_TIMEOUT_MS = 5 * 60 * 1000;
 
 function getDados(sessao) {
   const d = sessao.dados_temporarios;
@@ -115,7 +141,31 @@ async function processarMensagem({ cliente, sessao, texto }) {
   // Menu principal — usa mensagem_boas_vindas se configurada, senão fallback hardcoded
   const menuPrincipal = ctx.mensagemBoasVindas || T.menuSemAgendamento(ctx.nomeMarca);
 
-  // Reinício do fluxo: saudação ou palavra-chave de menu reinicia independente do estado
+  // ── Timeout de inatividade (5 min) ─────────────────────────────────────────
+  if (ESTADOS_COM_FLUXO_ATIVO.has(estado) && sessao.updated_at) {
+    const ultimaAt = new Date(sessao.updated_at);
+    if (Date.now() - ultimaAt.getTime() > INATIVIDADE_TIMEOUT_MS) {
+      const ativo = await repos.findAgendamentoAtivoPorCliente(clienteId);
+      const novoEstadoTimeout = ativo ? ESTADO.MENU_COM_AGENDAMENTO : ESTADO.MENU_SEM_AGENDAMENTO;
+      gravarHistorico(estado, novoEstadoTimeout, msg, { timeout: true });
+      respostas.push('_Sua sessão anterior expirou por inatividade._\n\n' + (ativo ? T.menuComAgendamento(ctx.nomeMarca) : menuPrincipal));
+      return { respostas, novoEstado: novoEstadoTimeout, novosDados: {}, historico };
+    }
+  }
+
+  // ── Cancelamento explícito ("cancelar", "sair", "0", etc.) ──────────────────
+  if (isCancelMessage(msg) && !ESTADOS_NAO_INTERROMPIVEIS.has(estado)) {
+    // Se estava no meio de um fluxo, avisa e volta ao menu
+    if (ESTADOS_COM_FLUXO_ATIVO.has(estado)) {
+      const ativo = await repos.findAgendamentoAtivoPorCliente(clienteId);
+      const novoEstadoCancel = ativo ? ESTADO.MENU_COM_AGENDAMENTO : ESTADO.MENU_SEM_AGENDAMENTO;
+      gravarHistorico(estado, novoEstadoCancel, msg, { cancelado: true });
+      respostas.push('Operação cancelada.\n\n' + (ativo ? T.menuComAgendamento(ctx.nomeMarca) : menuPrincipal));
+      return { respostas, novoEstado: novoEstadoCancel, novosDados: {}, historico };
+    }
+  }
+
+  // ── Reinício do fluxo: saudação ou palavra-chave de menu ────────────────────
   if (isRestartMessage(msg) && !ESTADOS_NAO_INTERROMPIVEIS.has(estado)) {
     if (!cliente.nome && cliente.whatsapp_name) {
       await repos.updateClienteNome(clienteId, cliente.whatsapp_name);
