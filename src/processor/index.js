@@ -269,6 +269,10 @@ async function processarMensagem({ cliente, sessao, texto }) {
     // Texto com dígitos → número de slot ou NLP com hora (ex: "1", "seg 08:00", "segunda 8h")
     const choice = slotFromChoice(msg, ctx.slots);
     if (!choice) {
+      // Se mencionou um dia + hora fora da faixa, avisa explicitamente
+      const normMsg = msg.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      const temDia = /segunda|terca|quarta|quinta|sexta|sabado|\bseg\b|\bter\b|\bqua\b|\bqui\b|\bsex\b|\bsab\b/.test(normMsg);
+      if (temDia) respostas.push('⚠️ Horário não disponível. Escolha um dos horários abaixo:');
       respostas.push(slotsHorarioText(ctx.slots));
       return { respostas, novoEstado: estado, novosDados: dados, historico: null };
     }
@@ -393,6 +397,9 @@ async function processarMensagem({ cliente, sessao, texto }) {
 
     const choice = slotFromChoice(msg, ctx.slots);
     if (!choice) {
+      const normMsg = msg.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      const temDia = /segunda|terca|quarta|quinta|sexta|sabado|\bseg\b|\bter\b|\bqua\b|\bqui\b|\bsex\b|\bsab\b/.test(normMsg);
+      if (temDia) respostas.push('⚠️ Horário não disponível. Escolha um dos horários abaixo:');
       respostas.push(slotsHorarioText(ctx.slots));
       return { respostas, novoEstado: estado, novosDados: dados, historico: null };
     }

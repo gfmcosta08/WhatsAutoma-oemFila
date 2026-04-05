@@ -194,6 +194,8 @@ function slotFromNlp(texto, slots) {
     // Tenta match só pela hora
     const hourOnly = daySlots.find(s => s.hour === targetHour);
     if (hourOnly) return hourOnly;
+    // Hora especificada mas não existe nesse dia → não disponível
+    return null;
   }
 
   // Sem hora especificada: retorna primeiro slot do dia
