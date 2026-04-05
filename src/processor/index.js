@@ -5,7 +5,7 @@ const reposEmpresa = require('../database/reposEmpresa');
 const reposAgendamento = require('../database/reposAgendamento');
 const { ESTADO } = require('./states');
 const T = require('../whatsapp/templates');
-const { parseHorariosConfig, slotFromChoice, slotsHorarioText } = require('./horariosHelper');
+const { parseHorariosConfig, slotFromChoice, slotsHorarioText, getDaySlotsForNlp } = require('./horariosHelper');
 const { notifyGerenteNovoPendente } = require('./operadorFlow');
 
 // Palavras que reiniciam o fluxo independente do estado atual
@@ -48,6 +48,34 @@ function servicosText(servicos) {
   });
   lines.push('', '_Digite o número do serviço_');
   return lines.join('\n');
+}
+
+/**
+ * Texto de desambiguação para um único dia (quando user digitou só o nome do dia).
+ * Ex: "*Segunda-feira, 07/04*\nQual horário?\n\n1) 08:00\n2) 14:00"
+ */
+function dayDisambigText(dayStr, dateStr, daySlots) {
+  const lines = [`*${dayStr}, ${dateStr}*`, 'Qual horário?', ''];
+  daySlots.forEach((s, i) => {
+    const hh = String(s.hour).padStart(2, '0');
+    const mm = String(s.minute || 0).padStart(2, '0');
+    lines.push(`${i + 1}) ${hh}:${mm}`);
+  });
+  return lines.join('\n');
+}
+
+/**
+ * Monta { horario: Date, label: string } a partir de um slot.
+ */
+function slotToChoice(slot) {
+  const dt = new Date();
+  dt.setDate(dt.getDate() + slot.daysFromNow);
+  dt.setHours(slot.hour, slot.minute || 0, 0, 0);
+  const hh = String(slot.hour).padStart(2, '0');
+  const mm = String(slot.minute || 0).padStart(2, '0');
+  const weekday = dt.toLocaleDateString('pt-BR', { weekday: 'long' });
+  const dayStr = weekday.charAt(0).toUpperCase() + weekday.slice(1);
+  return { horario: dt, label: `${dayStr} ${hh}:${mm}` };
 }
 
 async function loadBotContext() {
@@ -185,6 +213,60 @@ async function processarMensagem({ cliente, sessao, texto }) {
       respostas.push(slotsHorarioText(ctx.slots));
       return { respostas, novoEstado: estado, novosDados: dados, historico: null };
     }
+
+    // Desambiguação de dia pendente: user já informou o dia, agora escolhe o horário (1, 2, ...)
+    if (dados._dia_pendente_dow !== undefined) {
+      const pendingDow = Number(dados._dia_pendente_dow);
+      const daySlots = ctx.slots.filter(s => {
+        const dt = new Date(); dt.setDate(dt.getDate() + (s.daysFromNow || 0)); return dt.getDay() === pendingDow;
+      });
+      const n = parseInt(msg, 10);
+      const slot = Number.isFinite(n) && n > 0 ? daySlots[n - 1] : null;
+      if (slot) {
+        const { _dia_pendente_dow: _r, ...cleanDados } = dados;
+        const choice = slotToChoice(slot);
+        novoEstado = ESTADO.CONFIRMANDO_AGENDAMENTO;
+        novosDados = { ...cleanDados, horario_selecionado: choice.label, horario_iso: choice.horario.toISOString() };
+        gravarHistorico(estado, novoEstado, msg, { slot: choice.label });
+        respostas.push(T.confirmarAgendamento({ horarioLabel: choice.label, descricao: dados.servico_nome || '-' }));
+        return { respostas, novoEstado, novosDados, historico };
+      }
+      // Seleção inválida — re-exibir opções do dia
+      if (daySlots.length) {
+        const dt0 = new Date(); dt0.setDate(dt0.getDate() + daySlots[0].daysFromNow);
+        const wd = dt0.toLocaleDateString('pt-BR', { weekday: 'long' });
+        const ds = wd.charAt(0).toUpperCase() + wd.slice(1);
+        const dts = dt0.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+        respostas.push(dayDisambigText(ds, dts, daySlots));
+      } else {
+        respostas.push(slotsHorarioText(ctx.slots));
+      }
+      return { respostas, novoEstado: estado, novosDados: dados, historico: null };
+    }
+
+    // Texto sem dígitos → pode ser nome do dia (ex: "segunda", "seg", "terça")
+    if (!/\d/.test(msg)) {
+      const dayInfo = getDaySlotsForNlp(msg, ctx.slots);
+      if (dayInfo) {
+        if (dayInfo.daySlots.length === 1) {
+          // Único horário nesse dia — confirma direto
+          const choice = slotToChoice(dayInfo.daySlots[0]);
+          novoEstado = ESTADO.CONFIRMANDO_AGENDAMENTO;
+          novosDados = { ...dados, horario_selecionado: choice.label, horario_iso: choice.horario.toISOString() };
+          gravarHistorico(estado, novoEstado, msg, { slot: choice.label });
+          respostas.push(T.confirmarAgendamento({ horarioLabel: choice.label, descricao: dados.servico_nome || '-' }));
+          return { respostas, novoEstado, novosDados, historico };
+        }
+        // Múltiplos horários nesse dia — pede qual
+        respostas.push(dayDisambigText(dayInfo.dayStr, dayInfo.dateStr, dayInfo.daySlots));
+        novosDados = { ...dados, _dia_pendente_dow: dayInfo.dow };
+        return { respostas, novoEstado: estado, novosDados, historico: null };
+      }
+      respostas.push(slotsHorarioText(ctx.slots));
+      return { respostas, novoEstado: estado, novosDados: dados, historico: null };
+    }
+
+    // Texto com dígitos → número de slot ou NLP com hora (ex: "1", "seg 08:00", "segunda 8h")
     const choice = slotFromChoice(msg, ctx.slots);
     if (!choice) {
       respostas.push(slotsHorarioText(ctx.slots));
@@ -260,6 +342,55 @@ async function processarMensagem({ cliente, sessao, texto }) {
       respostas.push(slotsHorarioText(ctx.slots));
       return { respostas, novoEstado: estado, novosDados: dados, historico: null };
     }
+
+    // Desambiguação de dia pendente (mesma lógica de SELECIONANDO_HORARIO)
+    if (dados._dia_pendente_dow !== undefined) {
+      const pendingDow = Number(dados._dia_pendente_dow);
+      const daySlots = ctx.slots.filter(s => {
+        const dt = new Date(); dt.setDate(dt.getDate() + (s.daysFromNow || 0)); return dt.getDay() === pendingDow;
+      });
+      const n = parseInt(msg, 10);
+      const slot = Number.isFinite(n) && n > 0 ? daySlots[n - 1] : null;
+      if (slot) {
+        const { _dia_pendente_dow: _r, ...cleanDados } = dados;
+        const choice = slotToChoice(slot);
+        novoEstado = ESTADO.REAGENDANDO_DESCRICAO;
+        novosDados = { ...cleanDados, horario_selecionado: choice.label, horario_iso: choice.horario.toISOString(), reagendando: true };
+        gravarHistorico(estado, novoEstado, msg, {});
+        respostas.push('Descreva o serviço para o novo horário (ou envie "ok" para manter o mesmo).');
+        return { respostas, novoEstado, novosDados, historico };
+      }
+      if (daySlots.length) {
+        const dt0 = new Date(); dt0.setDate(dt0.getDate() + daySlots[0].daysFromNow);
+        const wd = dt0.toLocaleDateString('pt-BR', { weekday: 'long' });
+        const ds = wd.charAt(0).toUpperCase() + wd.slice(1);
+        const dts = dt0.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+        respostas.push(dayDisambigText(ds, dts, daySlots));
+      } else {
+        respostas.push(slotsHorarioText(ctx.slots));
+      }
+      return { respostas, novoEstado: estado, novosDados: dados, historico: null };
+    }
+
+    if (!/\d/.test(msg)) {
+      const dayInfo = getDaySlotsForNlp(msg, ctx.slots);
+      if (dayInfo) {
+        if (dayInfo.daySlots.length === 1) {
+          const choice = slotToChoice(dayInfo.daySlots[0]);
+          novoEstado = ESTADO.REAGENDANDO_DESCRICAO;
+          novosDados = { ...dados, horario_selecionado: choice.label, horario_iso: choice.horario.toISOString(), reagendando: true };
+          gravarHistorico(estado, novoEstado, msg, {});
+          respostas.push('Descreva o serviço para o novo horário (ou envie "ok" para manter o mesmo).');
+          return { respostas, novoEstado, novosDados, historico };
+        }
+        respostas.push(dayDisambigText(dayInfo.dayStr, dayInfo.dateStr, dayInfo.daySlots));
+        novosDados = { ...dados, _dia_pendente_dow: dayInfo.dow };
+        return { respostas, novoEstado: estado, novosDados, historico: null };
+      }
+      respostas.push(slotsHorarioText(ctx.slots));
+      return { respostas, novoEstado: estado, novosDados: dados, historico: null };
+    }
+
     const choice = slotFromChoice(msg, ctx.slots);
     if (!choice) {
       respostas.push(slotsHorarioText(ctx.slots));

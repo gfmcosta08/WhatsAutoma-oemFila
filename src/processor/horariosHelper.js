@@ -201,41 +201,82 @@ function slotFromNlp(texto, slots) {
 }
 
 /**
- * Exibe horários agrupados por dia em blocos limpos.
+ * Retorna os slots de um dia específico para desambiguação NLP.
+ * Só é chamada quando o usuário digitou apenas o nome do dia (sem hora).
+ * Retorna { dow, dayStr, dateStr, daySlots } ou null.
+ */
+function getDaySlotsForNlp(texto, slots) {
+  if (!texto || !slots || !slots.length) return null;
+  const norm = normalizeStrNlp(texto);
+  // Se contém dígito, provavelmente tem hora — deixa slotFromNlp tratar
+  if (/\d/.test(norm)) return null;
+
+  let targetDow = null;
+  outer: for (const [dowStr, aliases] of Object.entries(NLP_DAY_ALIASES)) {
+    for (const alias of aliases) {
+      const re = new RegExp('(?:^|\\s)' + alias.replace(/ /g, '\\s+') + '(?:\\s|$)');
+      if (re.test(norm)) {
+        targetDow = Number(dowStr);
+        break outer;
+      }
+    }
+  }
+  if (targetDow === null) return null;
+
+  const daySlots = slots.filter(s => slotDow(s) === targetDow);
+  if (!daySlots.length) return null;
+
+  const dt = new Date();
+  dt.setDate(dt.getDate() + daySlots[0].daysFromNow);
+  const weekday = dt.toLocaleDateString('pt-BR', { weekday: 'long' });
+  const dayStr = weekday.charAt(0).toUpperCase() + weekday.slice(1);
+  const dateStr = dt.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+
+  return { dow: targetDow, dayStr, dateStr, daySlots };
+}
+
+/**
+ * Exibe horários agrupados por dia com data e numeração.
  * Exemplo:
- *   *Segunda-feira*
- *   08:00
- *   14:00
+ *   *Horários disponíveis:*
  *
- *   *Terça-feira*
- *   09:00
+ *   *Segunda-feira, 07/04*
+ *   1) 08:00
+ *   2) 14:00
+ *
+ *   *Terça-feira, 08/04*
+ *   3) 09:00
+ *
+ *   _Digite o número ou o horário (ex: seg 08:00)_
  */
 function slotsHorarioText(slots) {
   const list = slots && slots.length ? slots : DEFAULT_SLOTS;
   const now = new Date();
 
-  // Agrupar por dia calendário
-  const byDay = new Map(); // "Dia da Semana" → slots[]
+  // Agrupar por dia calendário preservando a ordem
+  const byDay = new Map(); // key → { dayStr, dateStr, slots[] }
   for (const s of list) {
     const dt = new Date(now);
     dt.setDate(now.getDate() + (s.daysFromNow || 0));
     const weekday = dt.toLocaleDateString('pt-BR', { weekday: 'long' });
     const dayStr = weekday.charAt(0).toUpperCase() + weekday.slice(1);
-    if (!byDay.has(dayStr)) byDay.set(dayStr, []);
-    byDay.get(dayStr).push(s);
+    const dateStr = dt.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+    const key = `${dayStr}|${dateStr}`;
+    if (!byDay.has(key)) byDay.set(key, { dayStr, dateStr, slots: [] });
+    byDay.get(key).slots.push(s);
   }
 
-  const lines = [];
-  for (const [dayStr, daySlots] of byDay) {
-    lines.push(`*${dayStr}*`);
+  const lines = ['*Horários disponíveis:*', ''];
+  for (const { dayStr, dateStr, slots: daySlots } of byDay.values()) {
+    lines.push(`*${dayStr}, ${dateStr}*`);
     for (const s of daySlots) {
       const hh = String(s.hour).padStart(2, '0');
       const mm = String(s.minute || 0).padStart(2, '0');
-      lines.push(`${hh}:${mm}`);
+      lines.push(`${s.n}) ${hh}:${mm}`);
     }
     lines.push('');
   }
-  lines.push('_Digite o dia e horário. Ex: "segunda 08:00"_');
+  lines.push('_Digite o número ou o horário (ex: seg 08:00)_');
 
   return lines.join('\n');
 }
@@ -376,6 +417,7 @@ module.exports = {
   slotFromChoice,
   slotFromNlp,
   slotsHorarioText,
+  getDaySlotsForNlp,
   DEFAULT_SLOTS,
   concreteSlotsFromConfig,
   isDataBloqueada,
