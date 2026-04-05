@@ -18,10 +18,23 @@ function getDados(sessao) {
   }
 }
 
+function servicosText(servicos) {
+  if (!servicos || !servicos.length) {
+    return 'Nenhum serviço cadastrado. Entre em contato com o atendente.';
+  }
+  const lines = ['*Escolha o serviço:*', ''];
+  servicos.forEach((s, i) => {
+    lines.push(`${i + 1}) ${s.nome}`);
+  });
+  lines.push('', '_Digite o número do serviço_');
+  return lines.join('\n');
+}
+
 async function loadBotContext() {
-  const [empresa, cfg] = await Promise.all([
+  const [empresa, cfg, servicos] = await Promise.all([
     reposEmpresa.findEmpresaById(1),
     reposAgendamento.getConfig(),
+    reposAgendamento.listServicos(),
   ]);
   const nomeMarca = empresa && empresa.nome ? String(empresa.nome).trim() : 'Sua empresa';
   let mensagemBoasVindas = null;
@@ -29,11 +42,11 @@ async function loadBotContext() {
     mensagemBoasVindas = String(cfg.mensagem_boas_vindas).trim();
   }
   const slots = parseHorariosConfig(cfg && cfg.horarios_disponiveis);
-  return { nomeMarca, mensagemBoasVindas, slots };
+  return { nomeMarca, mensagemBoasVindas, slots, servicos: servicos || [] };
 }
 
 /**
- * processarMensagem — lógica da máquina de estados + persistência (pontos 2–5 do documento)
+ * processarMensagem — máquina de estados do bot
  */
 async function processarMensagem({ cliente, sessao, texto }) {
   const ctx = await loadBotContext();
@@ -51,26 +64,27 @@ async function processarMensagem({ cliente, sessao, texto }) {
     historico = { estado_anterior, estado_novo, mensagem_trigger, metadata: metadata || {} };
   };
 
+  // Menu principal — usa mensagem_boas_vindas se configurada, senão fallback hardcoded
+  const menuPrincipal = ctx.mensagemBoasVindas || T.menuSemAgendamento(ctx.nomeMarca);
+
   if (estado === ESTADO.AGUARDANDO_NOME) {
-    if (!msg) {
-      respostas.push('Por favor, envie seu nome.');
-      return { respostas, novoEstado: estado, novosDados: dados, historico: null };
+    // Não pede nome — usa nome do WhatsApp automaticamente
+    if (!cliente.nome && cliente.whatsapp_name) {
+      await repos.updateClienteNome(clienteId, cliente.whatsapp_name);
     }
-    await repos.updateClienteNome(clienteId, msg);
     const ativo = await repos.findAgendamentoAtivoPorCliente(clienteId);
     novoEstado = ativo ? ESTADO.MENU_COM_AGENDAMENTO : ESTADO.MENU_SEM_AGENDAMENTO;
-    gravarHistorico(estado, novoEstado, msg, { nome: msg });
-    respostas.push(`Olá, ${msg}!`);
-    respostas.push(ativo ? T.menuComAgendamento(ctx.nomeMarca) : T.menuSemAgendamento(ctx.nomeMarca));
+    gravarHistorico(estado, novoEstado, msg, {});
+    respostas.push(ativo ? T.menuComAgendamento(ctx.nomeMarca) : menuPrincipal);
     return { respostas, novoEstado, novosDados: {}, historico };
   }
 
   if (estado === ESTADO.MENU_SEM_AGENDAMENTO) {
     if (msg === '1') {
-      novoEstado = ESTADO.SELECIONANDO_HORARIO;
-      novosDados = { ...dados, ultimo_menu: 'SELECIONANDO_HORARIO' };
+      novoEstado = ESTADO.SELECIONANDO_SERVICO;
+      novosDados = { ...dados };
       gravarHistorico(estado, novoEstado, msg, {});
-      respostas.push(slotsHorarioText(ctx.slots));
+      respostas.push(servicosText(ctx.servicos));
       return { respostas, novoEstado, novosDados, historico };
     }
     if (msg === '2') {
@@ -85,8 +99,22 @@ async function processarMensagem({ cliente, sessao, texto }) {
       respostas.push('Até logo!');
       return { respostas, novoEstado, novosDados: dados, historico };
     }
-    respostas.push(T.menuSemAgendamento(ctx.nomeMarca));
+    respostas.push(menuPrincipal);
     return { respostas, novoEstado, novosDados: dados, historico: null };
+  }
+
+  if (estado === ESTADO.SELECIONANDO_SERVICO) {
+    const n = parseInt(msg, 10);
+    const servico = Number.isFinite(n) && n > 0 ? ctx.servicos[n - 1] : null;
+    if (!servico) {
+      respostas.push(servicosText(ctx.servicos));
+      return { respostas, novoEstado: estado, novosDados: dados, historico: null };
+    }
+    novoEstado = ESTADO.SELECIONANDO_HORARIO;
+    novosDados = { ...dados, servico_id: servico.id, servico_nome: servico.nome };
+    gravarHistorico(estado, novoEstado, msg, { servico: servico.nome });
+    respostas.push(slotsHorarioText(ctx.slots));
+    return { respostas, novoEstado, novosDados, historico };
   }
 
   if (estado === ESTADO.MENU_COM_AGENDAMENTO) {
@@ -113,7 +141,7 @@ async function processarMensagem({ cliente, sessao, texto }) {
     }
     if (msg === '4') {
       novoEstado = ativo ? ESTADO.MENU_COM_AGENDAMENTO : ESTADO.MENU_SEM_AGENDAMENTO;
-      respostas.push(ativo ? T.menuComAgendamento(ctx.nomeMarca) : T.menuSemAgendamento(ctx.nomeMarca));
+      respostas.push(ativo ? T.menuComAgendamento(ctx.nomeMarca) : menuPrincipal);
       return { respostas, novoEstado, novosDados: dados, historico: null };
     }
     respostas.push(T.menuComAgendamento(ctx.nomeMarca));
@@ -131,20 +159,23 @@ async function processarMensagem({ cliente, sessao, texto }) {
       return { respostas, novoEstado: estado, novosDados: dados, historico: null };
     }
     const { horario, label } = choice;
-    novoEstado = ESTADO.DIGITANDO_SERVICO;
-    novosDados = { ...dados, horario_selecionado: label, horario_iso: horario.toISOString(), ultimo_menu: 'DIGITANDO_SERVICO' };
+    novoEstado = ESTADO.CONFIRMANDO_AGENDAMENTO;
+    novosDados = { ...dados, horario_selecionado: label, horario_iso: horario.toISOString() };
     gravarHistorico(estado, novoEstado, msg, { slot: label });
-    respostas.push('Descreva o serviço desejado (ex.: lavagem simples, completa, polimento).');
+    respostas.push(T.confirmarAgendamento({ horarioLabel: label, descricao: dados.servico_nome || '-' }));
     return { respostas, novoEstado, novosDados, historico };
   }
 
   if (estado === ESTADO.DIGITANDO_SERVICO) {
+    // Estado legado — redireciona para seleção de serviço se possível
     if (!msg) {
-      respostas.push('Envie uma descrição do serviço.');
-      return { respostas, novoEstado: estado, novosDados: dados, historico: null };
+      respostas.push(servicosText(ctx.servicos));
+      novoEstado = ESTADO.SELECIONANDO_SERVICO;
+      return { respostas, novoEstado, novosDados: dados, historico: null };
     }
+    // Aceita texto livre como nome do serviço (compatibilidade com sessões antigas)
     novoEstado = ESTADO.CONFIRMANDO_AGENDAMENTO;
-    novosDados = { ...dados, descricao: msg, servico_line: 'Lavagem' };
+    novosDados = { ...dados, servico_nome: msg };
     gravarHistorico(estado, novoEstado, msg, {});
     respostas.push(T.confirmarAgendamento({ horarioLabel: dados.horario_selecionado || '-', descricao: msg }));
     return { respostas, novoEstado, novosDados, historico };
@@ -153,7 +184,6 @@ async function processarMensagem({ cliente, sessao, texto }) {
   if (estado === ESTADO.CONFIRMANDO_AGENDAMENTO) {
     if (msg === '1') {
       if (!dados.horario_iso) {
-        respostas.push('Horário não encontrado. Escolha de novo.');
         novoEstado = ESTADO.SELECIONANDO_HORARIO;
         respostas.push(slotsHorarioText(ctx.slots));
         return { respostas, novoEstado, novosDados: dados, historico: null };
@@ -162,9 +192,9 @@ async function processarMensagem({ cliente, sessao, texto }) {
       const ag = await repos.insertAgendamento({
         cliente_id: clienteId,
         horario,
-        servico: dados.servico_line || 'Lavagem',
+        servico: dados.servico_nome || 'Serviço',
         origem: 'whatsapp',
-        descricao: dados.descricao || '',
+        descricao: dados.servico_nome || '',
         status: 'pendente',
       });
       await repos.insertLembretesParaAgendamento({
@@ -189,7 +219,7 @@ async function processarMensagem({ cliente, sessao, texto }) {
       respostas.push(slotsHorarioText(ctx.slots));
       return { respostas, novoEstado, novosDados: dados, historico };
     }
-    respostas.push(T.confirmarAgendamento({ horarioLabel: dados.horario_selecionado || '-', descricao: dados.descricao || '-' }));
+    respostas.push(T.confirmarAgendamento({ horarioLabel: dados.horario_selecionado || '-', descricao: dados.servico_nome || '-' }));
     return { respostas, novoEstado, novosDados: dados, historico: null };
   }
 
@@ -216,7 +246,7 @@ async function processarMensagem({ cliente, sessao, texto }) {
     const orig = origId ? await repos.findAgendamentoById(origId) : await repos.findAgendamentoAtivoPorCliente(clienteId);
     if (!orig) {
       novoEstado = ESTADO.MENU_SEM_AGENDAMENTO;
-      respostas.push('Não encontramos agendamento. ' + T.menuSemAgendamento(ctx.nomeMarca));
+      respostas.push('Não encontramos agendamento. ' + menuPrincipal);
       return { respostas, novoEstado, novosDados: {}, historico: null };
     }
     const horario = new Date(dados.horario_iso);
@@ -224,7 +254,7 @@ async function processarMensagem({ cliente, sessao, texto }) {
     const novo = await repos.insertAgendamento({
       cliente_id: clienteId,
       horario,
-      servico: orig.servico || 'Lavagem',
+      servico: orig.servico || 'Serviço',
       descricao: descricao || '',
       status: 'pendente',
       reagendado_de_id: orig.id,
@@ -249,7 +279,7 @@ async function processarMensagem({ cliente, sessao, texto }) {
     const ativo = await repos.findAgendamentoAtivoPorCliente(clienteId);
     if (!ativo) {
       novoEstado = ESTADO.POS_ACAO;
-      respostas.push('Não há agendamento ativo. ' + T.menuSemAgendamento(ctx.nomeMarca));
+      respostas.push('Não há agendamento ativo. ' + menuPrincipal);
       return { respostas, novoEstado, novosDados: {}, historico: null };
     }
     await repos.updateAgendamentoCancelar(ativo.id, ativo.status, msg);
@@ -258,7 +288,7 @@ async function processarMensagem({ cliente, sessao, texto }) {
     novosDados = {};
     gravarHistorico(estado, novoEstado, msg, { motivo: msg });
     respostas.push('Agendamento cancelado. Obrigado!');
-    respostas.push(T.menuSemAgendamento(ctx.nomeMarca));
+    respostas.push(menuPrincipal);
     return { respostas, novoEstado, novosDados, historico };
   }
 
@@ -266,22 +296,20 @@ async function processarMensagem({ cliente, sessao, texto }) {
     const ativo = await repos.findAgendamentoAtivoPorCliente(clienteId);
     novoEstado = ativo ? ESTADO.MENU_COM_AGENDAMENTO : ESTADO.MENU_SEM_AGENDAMENTO;
     gravarHistorico(estado, novoEstado, msg, {});
-    respostas.push(ativo ? T.menuComAgendamento(ctx.nomeMarca) : T.menuSemAgendamento(ctx.nomeMarca));
+    respostas.push(ativo ? T.menuComAgendamento(ctx.nomeMarca) : menuPrincipal);
     return { respostas, novoEstado, novosDados: {}, historico };
   }
 
   if (estado === ESTADO.CONVERSA_ENCERRADA) {
-    respostas.push('Conversa encerrada. Envie qualquer mensagem para recomeçar.');
     novoEstado = ESTADO.AGUARDANDO_NOME;
     gravarHistorico(estado, novoEstado, msg, {});
+    respostas.push(menuPrincipal);
     return { respostas, novoEstado, novosDados: {}, historico };
   }
 
+  // Fallback — qualquer estado desconhecido
   novoEstado = ESTADO.AGUARDANDO_NOME;
-  const welcome =
-    ctx.mensagemBoasVindas ||
-    `Bem-vindo à ${ctx.nomeMarca}! Qual é seu nome?`;
-  respostas.push(welcome);
+  respostas.push(menuPrincipal);
   return { respostas, novoEstado, novosDados: {}, historico: null };
 }
 
