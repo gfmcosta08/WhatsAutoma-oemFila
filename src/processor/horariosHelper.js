@@ -50,9 +50,20 @@ function normalizeStrNlp(s) {
 }
 
 /**
- * Retorna o dia da semana (0=dom…6=sab) do slot baseado em daysFromNow.
+ * Retorna o nome curto do dia (sem "-feira"): "Segunda", "Terça", "Sexta", etc.
+ */
+function getDayAbbr(date) {
+  const long = date.toLocaleDateString('pt-BR', { weekday: 'long' });
+  const firstWord = long.split('-')[0];
+  return firstWord.charAt(0).toUpperCase() + firstWord.slice(1);
+}
+
+/**
+ * Retorna o dia da semana (0=dom…6=sab).
+ * Suporta slots concretos (com `date`) e slots legados (com `daysFromNow`).
  */
 function slotDow(s) {
+  if (s.date instanceof Date) return s.date.getDay();
   const dt = new Date();
   dt.setDate(dt.getDate() + (s.daysFromNow || 0));
   return dt.getDay();
@@ -238,47 +249,40 @@ function getDaySlotsForNlp(texto, slots) {
 }
 
 /**
- * Exibe horários agrupados por dia com data e numeração.
- * Exemplo:
- *   *Horários disponíveis:*
+ * Exibe horários disponíveis agrupados por dia, formato compacto:
+ *   *Sexta, 06/04:* 08:00, 09:00, 14:00
+ *   *Segunda, 09/04:* 08:00, 14:00
  *
- *   *Segunda-feira, 07/04*
- *   1) 08:00
- *   2) 14:00
- *
- *   *Terça-feira, 08/04*
- *   3) 09:00
- *
- *   _Digite o número ou o horário (ex: seg 08:00)_
+ * Se não houver slots, avisa que não há horários disponíveis.
  */
 function slotsHorarioText(slots) {
-  const list = slots && slots.length ? slots : DEFAULT_SLOTS;
-  const now = new Date();
+  if (!slots || !slots.length) {
+    return '⚠️ Nenhum horário disponível no momento.\nEntre em contato com o atendente.';
+  }
 
-  // Agrupar por dia calendário preservando a ordem
-  const byDay = new Map(); // key → { dayStr, dateStr, slots[] }
-  for (const s of list) {
-    const dt = new Date(now);
-    dt.setDate(now.getDate() + (s.daysFromNow || 0));
-    const weekday = dt.toLocaleDateString('pt-BR', { weekday: 'long' });
-    const dayStr = weekday.charAt(0).toUpperCase() + weekday.slice(1);
-    const dateStr = dt.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
-    const key = `${dayStr}|${dateStr}`;
-    if (!byDay.has(key)) byDay.set(key, { dayStr, dateStr, slots: [] });
+  // Agrupar por dia (preservando ordem)
+  const byDay = new Map();
+  for (const s of slots) {
+    // Suporte a slots concretos (date) e legados (daysFromNow)
+    const dt = s.date instanceof Date ? s.date : (() => {
+      const d = new Date(); d.setDate(d.getDate() + (s.daysFromNow || 0)); return d;
+    })();
+    const dayAbbr = s.dayAbbr || getDayAbbr(dt);
+    const dateStr = s.dateStr || dt.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+    const key = `${dayAbbr}|${dateStr}`;
+    if (!byDay.has(key)) byDay.set(key, { dayAbbr, dateStr, slots: [] });
     byDay.get(key).slots.push(s);
   }
 
-  const lines = ['*Horários disponíveis:*', ''];
-  for (const { dayStr, dateStr, slots: daySlots } of byDay.values()) {
-    lines.push(`*${dayStr}, ${dateStr}*`);
-    for (const s of daySlots) {
-      const hh = String(s.hour).padStart(2, '0');
-      const mm = String(s.minute || 0).padStart(2, '0');
-      lines.push(`${s.n}) ${hh}:${mm}`);
-    }
-    lines.push('');
+  const lines = [];
+  for (const { dayAbbr, dateStr, slots: daySlots } of byDay.values()) {
+    const times = daySlots
+      .map(s => `${String(s.hour).padStart(2, '0')}:${String(s.minute || 0).padStart(2, '0')}`)
+      .join(', ');
+    lines.push(`*${dayAbbr}, ${dateStr}:* ${times}`);
   }
-  lines.push('_Digite o número ou o horário (ex: seg 08:00)_');
+  lines.push('');
+  lines.push('_Digite o dia e horário (ex: sexta 08:00)_');
 
   return lines.join('\n');
 }
@@ -291,29 +295,29 @@ function slotFromChoice(opcao, slots) {
   const list = slots && slots.length ? slots : DEFAULT_SLOTS;
   const str = String(opcao || '').trim();
 
+  // Helper: obter Date a partir de slot (concreto ou legado)
+  function slotDate(s) {
+    if (s.date instanceof Date) return s.date;
+    const d = new Date();
+    d.setDate(d.getDate() + (s.daysFromNow || 0));
+    d.setHours(s.hour, s.minute || 0, 0, 0);
+    return d;
+  }
+
   // 1. Seleção por número
   const n = parseInt(str, 10);
   if (Number.isFinite(n) && n > 0 && String(n) === str) {
     const byNum = list.find(x => x.n === n);
-    if (byNum) {
-      const dt = new Date();
-      dt.setDate(dt.getDate() + byNum.daysFromNow);
-      dt.setHours(byNum.hour, byNum.minute || 0, 0, 0);
-      return { horario: dt, label: byNum.label };
-    }
+    if (byNum) return { horario: slotDate(byNum), label: byNum.label };
   }
 
   // 2. NLP: texto livre ("segunda 8", "ter 09:00", etc.)
   const nlp = slotFromNlp(str, list);
   if (nlp) {
-    const dt = new Date();
-    dt.setDate(dt.getDate() + nlp.daysFromNow);
-    dt.setHours(nlp.hour, nlp.minute || 0, 0, 0);
+    const dt = slotDate(nlp);
     const hh = String(nlp.hour).padStart(2, '0');
     const mm = String(nlp.minute || 0).padStart(2, '0');
-    const weekday = dt.toLocaleDateString('pt-BR', { weekday: 'long' });
-    const dayStr = weekday.charAt(0).toUpperCase() + weekday.slice(1);
-    const label = nlp.label || `${dayStr} ${hh}:${mm}`;
+    const label = nlp.label || `${getDayAbbr(dt)} ${hh}:${mm}`;
     return { horario: dt, label };
   }
 
@@ -414,12 +418,57 @@ function concreteSlotsFromConfig(rawHorarios, numDays = 14) {
   return slots;
 }
 
+/**
+ * Gera slots concretos disponíveis para os próximos numDays dias.
+ * Filtra:
+ *   - Horários já passados
+ *   - Slots já lotados (count >= vagas_por_slot)
+ *
+ * @param {*} rawHorarios  — valor de agendamento_config.horarios_disponiveis
+ * @param {Map} bookedMap  — "YYYY-MM-DDTHH" → count (da query listAgendamentosHorariosOcupados)
+ * @param {number} vagasPorSlot
+ * @param {number} numDays
+ * @returns {{ n, date, dayAbbr, dateStr, hour, minute, label }[]}
+ */
+function computeAvailableSlots(rawHorarios, bookedMap = new Map(), vagasPorSlot = 1, numDays = 14) {
+  const now = new Date();
+  const allSlots = concreteSlotsFromConfig(rawHorarios, numDays);
+  const available = [];
+  let n = 1;
+  for (const s of allSlots) {
+    if (s.start <= now) continue;
+    const key = s.start.toISOString().slice(0, 13); // "YYYY-MM-DDTHH"
+    const booked = bookedMap instanceof Map ? (bookedMap.get(key) || 0) : 0;
+    if (booked >= vagasPorSlot) continue;
+
+    const dayAbbr = getDayAbbr(s.start);
+    const dateStr = s.start.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+    const hour = s.start.getHours();
+    const minute = s.start.getMinutes();
+    const hh = String(hour).padStart(2, '0');
+    const mm = String(minute).padStart(2, '0');
+    available.push({
+      n,
+      date: s.start,
+      dayAbbr,
+      dateStr,
+      hour,
+      minute,
+      label: `${dayAbbr} ${hh}:${mm}`,
+    });
+    n++;
+  }
+  return available;
+}
+
 module.exports = {
   parseHorariosConfig,
   slotFromChoice,
   slotFromNlp,
   slotsHorarioText,
   getDaySlotsForNlp,
+  computeAvailableSlots,
+  getDayAbbr,
   DEFAULT_SLOTS,
   concreteSlotsFromConfig,
   isDataBloqueada,

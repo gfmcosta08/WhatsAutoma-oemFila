@@ -5,7 +5,7 @@ const reposEmpresa = require('../database/reposEmpresa');
 const reposAgendamento = require('../database/reposAgendamento');
 const { ESTADO } = require('./states');
 const T = require('../whatsapp/templates');
-const { parseHorariosConfig, slotFromChoice, slotsHorarioText, getDaySlotsForNlp } = require('./horariosHelper');
+const { slotFromChoice, slotsHorarioText, getDaySlotsForNlp, computeAvailableSlots } = require('./horariosHelper');
 const { notifyGerenteNovoPendente } = require('./operadorFlow');
 
 // Palavras que reiniciam o fluxo com saudação
@@ -92,30 +92,39 @@ function dayDisambigText(dayStr, dateStr, daySlots) {
 
 /**
  * Monta { horario: Date, label: string } a partir de um slot.
+ * Suporta slots concretos (com date) e legados (com daysFromNow).
  */
 function slotToChoice(slot) {
+  if (slot.date instanceof Date) {
+    return { horario: slot.date, label: slot.label };
+  }
   const dt = new Date();
-  dt.setDate(dt.getDate() + slot.daysFromNow);
+  dt.setDate(dt.getDate() + (slot.daysFromNow || 0));
   dt.setHours(slot.hour, slot.minute || 0, 0, 0);
   const hh = String(slot.hour).padStart(2, '0');
   const mm = String(slot.minute || 0).padStart(2, '0');
-  const weekday = dt.toLocaleDateString('pt-BR', { weekday: 'long' });
-  const dayStr = weekday.charAt(0).toUpperCase() + weekday.slice(1);
-  return { horario: dt, label: `${dayStr} ${hh}:${mm}` };
+  return { horario: dt, label: slot.label || `Slot ${hh}:${mm}` };
 }
 
 async function loadBotContext() {
-  const [empresa, cfg, servicos] = await Promise.all([
+  const [empresa, cfg, servicos, bookedMap] = await Promise.all([
     reposEmpresa.findEmpresaById(1),
     reposAgendamento.getConfig(),
     reposAgendamento.listServicos(),
+    reposAgendamento.listAgendamentosHorariosOcupados(14),
   ]);
   const nomeMarca = empresa && empresa.nome ? String(empresa.nome).trim() : 'Sua empresa';
   let mensagemBoasVindas = null;
   if (cfg && cfg.mensagem_boas_vindas && String(cfg.mensagem_boas_vindas).trim()) {
     mensagemBoasVindas = String(cfg.mensagem_boas_vindas).trim();
   }
-  const slots = parseHorariosConfig(cfg && cfg.horarios_disponiveis);
+  const vagasPorSlot = cfg && cfg.vagas_por_slot ? Math.max(1, Number(cfg.vagas_por_slot)) : 1;
+  const slots = computeAvailableSlots(
+    cfg && cfg.horarios_disponiveis,
+    bookedMap,
+    vagasPorSlot,
+    14
+  );
   return { nomeMarca, mensagemBoasVindas, slots, servicos: servicos || [] };
 }
 

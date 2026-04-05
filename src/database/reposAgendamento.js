@@ -126,6 +126,29 @@ async function deleteAgendamento(id) {
   return r.rowCount > 0;
 }
 
+/**
+ * Retorna mapa "YYYY-MM-DDTHH" → quantidade de agendamentos ativos nesse horário.
+ * Usado para filtrar slots já lotados na grade do bot.
+ */
+async function listAgendamentosHorariosOcupados(numDays = 14) {
+  const r = await query(
+    `SELECT DATE_TRUNC('hour', horario) AS slot_hour, COUNT(*) AS cnt
+     FROM agendamentos
+     WHERE horario >= NOW()
+       AND horario <= NOW() + ($1::text || ' days')::INTERVAL
+       AND LOWER(status) NOT IN ('cancelado', 'reagendado')
+     GROUP BY slot_hour`,
+    [String(numDays)]
+  );
+  const map = new Map();
+  for (const row of r.rows) {
+    // Chave: primeiros 13 chars do ISO string = "YYYY-MM-DDTHH"
+    const key = new Date(row.slot_hour).toISOString().slice(0, 13);
+    map.set(key, Number(row.cnt));
+  }
+  return map;
+}
+
 async function listServicos() {
   const r = await query(
     `SELECT id, nome, categoria, preco_centavos AS preco, descricao
@@ -187,6 +210,7 @@ module.exports = {
   listPendentes,
   listAgendamentos,
   deleteAgendamento,
+  listAgendamentosHorariosOcupados,
   listServicos,
   insertServico,
   insertServicosBulk,
